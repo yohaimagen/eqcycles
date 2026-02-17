@@ -5,6 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "eqcycles"
 version = "0.1.0"
+dependencies = [
+    "numpy",
+    "pandas",
+    "geopandas",
+    "scipy",
+    "scikit-learn",
+    "matplotlib",
+    "pygmt",
+    "meshio",
+    "pot",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]

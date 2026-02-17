@@ -49,19 +49,19 @@ def project_to_fault_trace(sim_coords: np.ndarray, shapefile_path: str) -> np.nd
     trace_x = np.interp(interp_dist, ref_dist, x_orig)
     trace_y = np.interp(interp_dist, ref_dist, y_orig)
     
-    # The reference trace is 2D (X, Y), so we only use X and Y from sim_coords
-    # We create a KD-Tree from the densified reference trace points for fast lookup
-    # Note: The original code used 3D points with Z=0, which is also fine,
-    # but since we're projecting 3D fault data onto a 2D map trace, a 2D tree is sufficient.
-    trace_points_2d = np.column_stack((trace_x * 1e-3, trace_y * 1e-3, np.zeros_like(trace_x)))  # Convert to km and add Z=0 for consistency
-    tree = cKDTree(trace_points_2d)
+    # Build the KD-Tree from the reference trace, scaling it to KILOMETERS
+    # to match the units of the input sim_coords.
+    trace_points_km = np.column_stack((trace_x * 1e-3, trace_y * 1e-3))
+    tree = cKDTree(trace_points_km)
+
+    # Query the tree to find the nearest reference trace point.
+    # The input sim_coords are expected to be in KILOMETERS.
+    # We only use the X and Y coordinates.
+    sim_coords_2d_km = sim_coords[:, :2]
+    distances, indices = tree.query(sim_coords_2d_km, k=1)
     
-    # Query the tree to find the nearest reference trace point for each simulation node.
-    # We only use the X and Y coordinates of the simulation mesh for this projection.
-    distances, indices = tree.query(sim_coords[:, :3], k=1)
-    
-    # The result is the along-strike distance of the *closest reference point*
-    # for each simulation node.
+    # The result is the along-strike distance from interp_dist (which is in METERS)
+    # corresponding to the closest point found in the km-based tree.
     node_along_strike = interp_dist[indices]
     
-    return node_along_strike * 1e-3
+    return node_along_strike

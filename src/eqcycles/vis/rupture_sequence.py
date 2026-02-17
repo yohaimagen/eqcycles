@@ -25,6 +25,7 @@ def plot_rupture_sequence(
     config: Dict[str, Any] = None,
     fig: pygmt.Figure = None,
     add_rupture_direction: bool = False,
+    ploting_mag_treshold: float = 7.0
 ):
     """
     Generates a rupture sequence plot for a given simulation run using PyGMT.
@@ -40,9 +41,8 @@ def plot_rupture_sequence(
     print(f"--> Processing Run for Rupture Sequence Plot...")
     
     # 1. Perform Geometric Analysis
-    # Project the mesh coordinates to the 1D fault trace
+    # Project the mesh coordinates to the 1D fault trace. This now returns meters.
     mesh_along_strike = project_to_fault_trace(sim_data.coords, shapefile_path)
-    print(np.max(mesh_along_strike), np.min(mesh_along_strike))
 
     # 2. Setup PyGMT Figure
     if fig is None:
@@ -53,13 +53,10 @@ def plot_rupture_sequence(
             FONT_TITLE=cfg["gmt_font_title"]
         )
 
-    # Define plot region based on analysis results
+    # Define plot region based on analysis results, converting meters to negative km
     max_time = sim_data.time[-1]
-    # Distances are in meters, convert to km for plotting
-    x_min_km = 0
-    x_max_km = np.max(mesh_along_strike)
-    print(f"    Plotting region: x [{x_min_km:.1f}, {x_max_km:.1f}] km, time [0, {max_time:.2f}] years")    
-    
+    x_min_km = -np.max(mesh_along_strike) * 1e-3
+    x_max_km = 0.0
     
     region = [x_min_km, x_max_km, 0.0, float(max_time)]
     
@@ -78,13 +75,15 @@ def plot_rupture_sequence(
 
     if sim_data.catalog.empty:
         print("    Warning: No events in the catalog to plot.")
-        fig.savefig(output_path)
-        return
+        if output_path:
+            fig.savefig(output_path)
+        return fig
 
     # 3. Iterate Through Events and Plot
     for idx, event in sim_data.catalog.iterrows():
-        if event['Mw'] < 6.5:
+        if event.Mw < ploting_mag_treshold:
             continue
+        
         # Get the rupture extent for this event
         centers, is_rup = get_rupture_mask(
             sim_data, 
@@ -97,16 +96,17 @@ def plot_rupture_sequence(
         if not np.any(is_rup):
             continue
             
-        # Convert distances (meters) to km and make them negative for plotting direction
-        rup_locs_km = centers[is_rup]
+        # Convert distances (meters) to negative km for plotting, matching original script
+        rup_locs_km = -centers[is_rup] * 1e-3
         eq_time_yr = event['Time_year']
         
-        # Plot the horizontal bar representing the rupture extent
+        # Plot individual circles for each ruptured bin, not a single line
         fig.plot(
-            x=[np.min(rup_locs_km), np.max(rup_locs_km)], 
-            y=[eq_time_yr, eq_time_yr], 
+            x=rup_locs_km, 
+            y=np.full_like(rup_locs_km, eq_time_yr), 
+            style='c0.15c',
             fill='red', 
-            pen='0.15c,red'
+            pen='0.1p,red'
         )
         
         # If the event is large enough, add a label and analyze its direction
@@ -127,8 +127,8 @@ def plot_rupture_sequence(
                     
                     if metrics and metrics.code != 0:
                         # Determine arrow direction based on propagation direction code
-                        # code > 0: propagates towards increasing distance (right on plot)
-                        # code < 0: propagates towards decreasing distance (left on plot)
+                        # code > 0: propagates towards increasing distance (plotted as left-to-right)
+                        # code < 0: propagates towards decreasing distance (plotted as right-to-left)
                         angle = 0 if metrics.code > 0 else 180
                         arrow_x = rup_locs_km.min() if metrics.code > 0 else rup_locs_km.max()
                         
@@ -142,6 +142,7 @@ def plot_rupture_sequence(
                     print(f"    Warning: Direction analysis failed for event {idx}: {e}")
 
     if output_path is not None:
-        fig.savefig(output_path)
+        print(f"--> Saving rupture plot to {output_path}")
+        fig.savefig(output_path, dpi=300)
 
     return fig
