@@ -101,4 +101,4 @@ venv.bak/
 .mypy_cache/
 
 # User-specified
-test_notbooks/
+test_notebooks/
