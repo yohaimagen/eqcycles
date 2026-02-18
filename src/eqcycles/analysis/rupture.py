@@ -11,6 +11,7 @@ PRE_EVENT_TIME = 24 * 60 * 60    # seconds (Window before event)
 POST_EVENT_TIME = 24 * 60 * 60   # seconds (Window after event)
 MIN_R2_THRESHOLD = 0.3           # R-squared threshold to declare "clear direction"
 DEFAULT_RUPTURE_THRESHOLD = 0.05 # Default slip rate threshold (m/s) for rupture arrival
+MIN_BRANCH_LENGTH_KM = 50.0      # Default minimum length (km) to define a rupture branch
 
 @dataclass
 class RuptureMetrics:
@@ -137,6 +138,7 @@ def analyze_rupture_direction(
     event_idx: int, 
     mesh_along_strike: np.ndarray,
     rupture_threshold: float = DEFAULT_RUPTURE_THRESHOLD,
+    min_branch_length_km: float = MIN_BRANCH_LENGTH_KM,
     verbose: bool = False
 ) -> Optional[RuptureMetrics]:
     """
@@ -180,72 +182,88 @@ def analyze_rupture_direction(
         if verbose: print("    Not enough ruptured nodes to analyze direction.")
         return RuptureMetrics(code=0)
 
-    # 4. Perform Linear Regression
-    X = node_dists.reshape(-1, 1)
-    y = arrival_times
-    
-    # First, try to fit a single line (unilateral model)
-    reg_all = LinearRegression().fit(X, y)
-    slope_all = reg_all.coef_[0]
-    r2_all = reg_all.score(X, y)
-    hypo_idx = np.argmin(arrival_times) 
-    if r2_all > MIN_R2_THRESHOLD:
-        
-        
-        hypo_dist = node_dists[hypo_idx]
-        hypo_time = arrival_times[hypo_idx]
-
-        if slope_all > 0:
-            if verbose:
-                velocity = 1 / (slope_all * 1000) if slope_all != 0 else float('inf')
-                print(f"    Unilateral Positive Fit: Slope={slope_all:.2e} s/m, R2={r2_all:.2f}, Est. Vel={velocity:.2f} km/s")
-            return RuptureMetrics(code=1, slope_pos=slope_all, r2_score_pos=r2_all, hypocenter_dist=hypo_dist, hypocenter_time=hypo_time)
-        else:
-            if verbose:
-                velocity = 1 / (slope_all * 1000) if slope_all != 0 else float('inf')
-                print(f"    Unilateral Negative Fit: Slope={slope_all:.2e} s/m, R2={r2_all:.2f}, Est. Vel={velocity:.2f} km/s")
-            return RuptureMetrics(code=-1, slope_neg=slope_all, r2_score_neg=r2_all, hypocenter_dist=hypo_dist, hypocenter_time=hypo_time)
-
-    # If unilateral fit is poor, try a bilateral model
-    if verbose:
-        print(f"    Unilateral fit poor (R2={r2_all:.2f}). Trying bilateral model.")
-    
-    # BILATERAL CASE: Define hypocenter as the point of earliest arrival time.
+    # 1. Identify hypocenter and rupture extents
     hypocenter_idx = np.argmin(arrival_times)
     hypo_dist = node_dists[hypocenter_idx]
     hypo_time = arrival_times[hypocenter_idx]
 
-    pos_branch_mask = node_dists >= hypo_dist
-    neg_branch_mask = node_dists <= hypo_dist
+    min_dist = np.min(node_dists)
+    max_dist = np.max(node_dists)
+    if verbose: print(f"    Hypocenter at {hypo_dist:.1f} m, time {hypo_time:.2f} s")
+    if verbose: print(f"    Rupture extent: {min_dist:.1f} m to {max_dist:.1f} m")
+    
+    extent_pos = (max_dist - hypo_dist) / 1000  # Convert to km
+    extent_neg = (hypo_dist - min_dist) / 1000  # Convert to km
+    if verbose: print(f"    Extent positive: {extent_pos:.1f} km, Extent negative: {extent_neg:.1f} km")
 
-    if np.sum(pos_branch_mask) < 3 or np.sum(neg_branch_mask) < 3:
-        if verbose: print("    Not enough data points for bilateral fit.")
+    has_pos_branch = extent_pos >= min_branch_length_km
+    has_neg_branch = extent_neg >= min_branch_length_km
+
+    
+    # 2. Decide on model based on rupture structure
+    
+    # Case 1: Bilateral rupture structure
+    if has_pos_branch and has_neg_branch:
+        if verbose: print(f"    Structure appears bilateral (extent_pos={extent_pos:.1f} km, extent_neg={extent_neg:.1f} km). Attempting bilateral fit.")
+        
+        pos_branch_mask = node_dists >= hypo_dist
+        neg_branch_mask = node_dists <= hypo_dist
+
+        if np.sum(pos_branch_mask) < 3 or np.sum(neg_branch_mask) < 3:
+            if verbose: print("    Not enough data points on branches for bilateral fit.")
+            return RuptureMetrics(code=0)
+
+        X_pos, y_pos = node_dists[pos_branch_mask].reshape(-1, 1), arrival_times[pos_branch_mask]
+        X_neg, y_neg = node_dists[neg_branch_mask].reshape(-1, 1), arrival_times[neg_branch_mask]
+
+        reg_pos = LinearRegression().fit(X_pos, y_pos)
+        slope_pos, r2_pos = reg_pos.coef_[0], reg_pos.score(X_pos, y_pos)
+
+        reg_neg = LinearRegression().fit(X_neg, y_neg)
+        slope_neg, r2_neg = reg_neg.coef_[0], reg_neg.score(X_neg, y_neg)
+
+        is_pos_good = r2_pos > MIN_R2_THRESHOLD and slope_pos > 0
+        is_neg_good = r2_neg > MIN_R2_THRESHOLD and slope_neg < 0
+
+        if is_pos_good and is_neg_good:
+            if verbose:
+                vel_pos = 1 / (slope_pos * 1000) if slope_pos != 0 else float('inf')
+                vel_neg = 1 / (slope_neg * 1000) if slope_neg != 0 else float('inf')
+                print(f"    Bilateral Fit Success: R2_pos={r2_pos:.2f}, R2_neg={r2_neg:.2f}")
+            return RuptureMetrics(code=2, slope_pos=slope_pos, r2_score_pos=r2_pos, slope_neg=slope_neg, r2_score_neg=r2_neg, hypocenter_dist=hypo_dist, hypocenter_time=hypo_time)
+        else:
+            if verbose: print(f"    Bilateral fit failed: R2_pos={r2_pos:.2f}, R2_neg={r2_neg:.2f}")
+            return RuptureMetrics(code=0)
+
+    # Case 2: Unilateral rupture structure (positive direction)
+    elif has_pos_branch:
+        if verbose: print(f"    Structure appears unilateral-positive (extent_pos={extent_pos:.1f} km). Attempting unilateral fit.")
+        
+        reg_all = LinearRegression().fit(node_dists.reshape(-1, 1), arrival_times)
+        slope_all, r2_all = reg_all.coef_[0], reg_all.score(node_dists.reshape(-1, 1), arrival_times)
+        
+        if r2_all > MIN_R2_THRESHOLD and slope_all > 0:
+            if verbose: print(f"    Unilateral Positive Fit Success: R2={r2_all:.2f}, Slope={slope_all:.2e}")
+            return RuptureMetrics(code=1, slope_pos=slope_all, r2_score_pos=r2_all, hypocenter_dist=hypo_dist, hypocenter_time=hypo_time)
+        else:
+            if verbose: print(f"    Unilateral Positive Fit Failed: R2={r2_all:.2f}, Slope={slope_all:.2e}")
+            return RuptureMetrics(code=0)
+
+    # Case 3: Unilateral rupture structure (negative direction)
+    elif has_neg_branch:
+        if verbose: print(f"    Structure appears unilateral-negative (extent_neg={extent_neg:.1f} km). Attempting unilateral fit.")
+
+        reg_all = LinearRegression().fit(node_dists.reshape(-1, 1), arrival_times)
+        slope_all, r2_all = reg_all.coef_[0], reg_all.score(node_dists.reshape(-1, 1), arrival_times)
+
+        if r2_all > MIN_R2_THRESHOLD and slope_all < 0:
+            if verbose: print(f"    Unilateral Negative Fit Success: R2={r2_all:.2f}, Slope={slope_all:.2e}")
+            return RuptureMetrics(code=-1, slope_neg=slope_all, r2_score_neg=r2_all, hypocenter_dist=hypo_dist, hypocenter_time=hypo_time)
+        else:
+            if verbose: print(f"    Unilateral Negative Fit Failed: R2={r2_all:.2f}, Slope={slope_all:.2e}")
+            return RuptureMetrics(code=0)
+            
+    # Case 4: Rupture is too small to analyze
+    else:
+        if verbose: print(f"    Rupture too small to analyze direction (extent_pos={extent_pos:.1f} km, extent_neg={extent_neg:.1f} km).")
         return RuptureMetrics(code=0)
-
-    X_pos, y_pos = node_dists[pos_branch_mask].reshape(-1, 1), arrival_times[pos_branch_mask]
-    X_neg, y_neg = node_dists[neg_branch_mask].reshape(-1, 1), arrival_times[neg_branch_mask]
-
-    reg_pos = LinearRegression().fit(X_pos, y_pos)
-    slope_pos = reg_pos.coef_[0]
-    r2_pos = reg_pos.score(X_pos, y_pos)
-
-    reg_neg = LinearRegression().fit(X_neg, y_neg)
-    slope_neg = reg_neg.coef_[0]
-    r2_neg = reg_neg.score(X_neg, y_neg)
-
-    is_pos_good = r2_pos > MIN_R2_THRESHOLD and slope_pos > 0
-    is_neg_good = r2_neg > MIN_R2_THRESHOLD and slope_neg < 0
-
-    if is_pos_good and is_neg_good:
-        if verbose:
-            vel_pos = 1 / (slope_pos * 1000) if slope_pos != 0 else float('inf')
-            vel_neg = 1 / (slope_neg * 1000) if slope_neg != 0 else float('inf')
-            print(f"    Bilateral Fit Success: ")
-            print(f"      - Pos. Branch: R2={r2_pos:.2f}, Vel={vel_pos:.2f} km/s")
-            print(f"      - Neg. Branch: R2={r2_neg:.2f}, Vel={vel_neg:.2f} km/s")
-        return RuptureMetrics(code=2, slope_pos=slope_pos, r2_score_pos=r2_pos, slope_neg=slope_neg, r2_score_neg=r2_neg, hypocenter_dist=hypo_dist, hypocenter_time=hypo_time)
-
-    if verbose:
-        print(f"    Bilateral fit failed or inconclusive. R2_pos={r2_pos:.2f} (Slope={slope_pos:.2e}), R2_neg={r2_neg:.2f} (Slope={slope_neg:.2e})")
-
-    return RuptureMetrics(code=0)

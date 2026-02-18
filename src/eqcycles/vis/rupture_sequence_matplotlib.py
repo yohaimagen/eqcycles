@@ -25,7 +25,8 @@ def plot_rupture_sequence_matplotlib(
     ax: plt.Axes = None,
     add_rupture_direction: bool = False,
     ploting_mag_treshold: float = 7.0,
-    add_catalog_index: bool = False
+    add_catalog_index: bool = False,
+    verbose: bool = False
 ):
     """
     Generates a rupture sequence plot for a given simulation run using Matplotlib.
@@ -58,7 +59,7 @@ def plot_rupture_sequence_matplotlib(
     x_max_km = 0.0
     
     ax.set_xlim(x_min_km, x_max_km)
-    ax.set_ylim(0.0, float(max_time))
+    ax.set_ylim(0.0, float(max_time) * 1.05) # Add 5% padding to the top of the y-axis
     
     ax.set_xlabel("Distance Along Strike [km]")
     ax.set_ylabel("Time [years]")
@@ -109,7 +110,7 @@ def plot_rupture_sequence_matplotlib(
             ax.text(
                 np.mean(rup_locs_km), 
                 eq_time_yr + (max_time * 0.025),
-                f"M{event['Mw']:.1f}", 
+                f"$M_w{event['Mw']:.1f}$", 
                 fontsize=8, 
                 fontweight="bold", 
                 ha="center",
@@ -129,10 +130,11 @@ def plot_rupture_sequence_matplotlib(
             
             if add_rupture_direction:
                 try:
-                    metrics = analyze_rupture_direction(sim_data, idx, mesh_along_strike, verbose=True)
+                    metrics = analyze_rupture_direction(sim_data, idx, mesh_along_strike, verbose=verbose)
                     
                     if metrics and metrics.code != 0:
-                        arrow_length_data = 0.075 * (x_max_km - x_min_km)
+                        arrow_length_data = 30
+                        # print(f'arrow_length_data : {arrow_length_data}')
                         arrow_props = dict(
                             head_width=0.01 * max_time,
                             head_length=0.02 * (x_max_km - x_min_km),
@@ -140,34 +142,31 @@ def plot_rupture_sequence_matplotlib(
                             ec='k',
                             lw=1
                         )
-
+                        x_hypo = -metrics.hypocenter_dist * 1e-3
+                        y_hypo = metrics.hypocenter_time / (365 * 24 * 60 * 60)
                         # Plot hypocenter star if data is available
                         if metrics.hypocenter_dist is not None and metrics.hypocenter_time is not None:
-                            x_hypo = -metrics.hypocenter_dist * 1e-3
-                            y_hypo = metrics.hypocenter_time / (365 * 24 * 60 * 60)
+                            
                             ax.plot(x_hypo, y_hypo, '*', color='yellow', markersize=10, markeredgecolor='black', zorder=10)
 
                         # Unilateral, left-pointing arrow (prop. along increasing mesh_along_strike)
                         if metrics.code == 1:
-                            x_start = rup_locs_km.max() # Start from the rightmost point of rupture extent (less negative x)
                             dx = -arrow_length_data    # Negative dx = points LEFT
-                            ax.arrow(x_start, eq_time_yr, dx, 0, **arrow_props)
+                            ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props)
                         
                         # Unilateral, right-pointing arrow (prop. along decreasing mesh_along_strike)
                         elif metrics.code == -1:
-                            x_start = rup_locs_km.min() # Start from the leftmost point of rupture extent (more negative x)
                             dx = arrow_length_data     # Positive dx = points RIGHT
-                            ax.arrow(x_start, eq_time_yr, dx, 0, **arrow_props)
+                            ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props)
 
                         # Bilateral, two arrows from hypocenter
                         elif metrics.code == 2 and metrics.hypocenter_dist is not None:
-                            x_center = -metrics.hypocenter_dist * 1e-3  # Convert to plot coords
 
                             # Arrow 1: left-pointing (for propagation along increasing mesh_along_strike)
-                            ax.arrow(x_center, eq_time_yr, -arrow_length_data, 0, **arrow_props)
+                            ax.arrow(x_hypo, y_hypo, -arrow_length_data, 0, **arrow_props)
                             
                             # Arrow 2: right-pointing (for propagation along decreasing mesh_along_strike)
-                            ax.arrow(x_center, eq_time_yr, arrow_length_data, 0, **arrow_props)
+                            ax.arrow(x_hypo, y_hypo, arrow_length_data, 0, **arrow_props)
 
                 except Exception as e:
                     print(f"    Warning: Direction analysis failed for event {idx}: {e}")

@@ -97,10 +97,11 @@ class HBILoader(BaseLoader):
         # 4. Load all fields
         # Note: slip_rate is log10(abs(vel))
         sr_data_raw = _load_and_reshape_field(f"vel{run_id}.dat")
-        slip_rate = np.log10(np.abs(sr_data_raw) + 1e-40) # Add small epsilon to avoid log(0)
+        slip_rate = np.log10(np.abs(sr_data_raw)) # Add small epsilon to avoid log(0)
         state_variable = _load_and_reshape_field(f"psi{run_id}.dat")
         shear_stress = _load_and_reshape_field(f"tau{run_id}.dat")
         normal_stress = _load_and_reshape_field(f"sigma{run_id}.dat")
+        slip = _load_and_reshape_field(f"slip{run_id}.dat")
         
         # Load EQ slip data
         eq_slip_file = base_path / f"EQslip{run_id}.dat"
@@ -133,6 +134,7 @@ class HBILoader(BaseLoader):
             state_variable=state_variable,
             shear_stress=shear_stress,
             normal_stress=normal_stress,
+            slip=slip,
             time=time_data,
             coords=coords,
             mesh=mesh,

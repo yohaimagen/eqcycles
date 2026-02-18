@@ -13,6 +13,7 @@ class SimulationData:
     state_variable: np.ndarray # psi from psi*.dat
     shear_stress: np.ndarray # tau from tau*.dat
     normal_stress: np.ndarray # sigma from sigma*.dat (added from plot_eq_sequance.py)
+    slip: np.ndarray        # slip from slip*.dat (added for diagnostics)
     time: np.ndarray         # time from time*.dat (in years)
     coords: np.ndarray       # xyz coordinates from xyz*.dat
 
@@ -59,6 +60,7 @@ class SimulationData:
             state_variable=_subset_if_time_dependent(self.state_variable),
             shear_stress=_subset_if_time_dependent(self.shear_stress),
             normal_stress=_subset_if_time_dependent(self.normal_stress),
+            slip=_subset_if_time_dependent(self.slip),
             time=self.time[time_mask],
             coords=self.coords, # Coords are not time-dependent
             mesh=self.mesh, # Mesh object is not time-dependent
