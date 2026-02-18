@@ -1,10 +1,10 @@
 # eqcycles Implementation Plan
 
-This design prioritizes the "separation of concerns" you requested, ensuring that visualization logic is isolated, loaders are abstract, and the package remains extendable.
+This document outlines the structure and components of the `eqcycles` package, which is designed for the analysis and visualization of earthquake cycle simulation data. The design prioritizes separation of concerns, modularity, and extensibility.
 
 ## 1. Directory Structure
 
-The project follows a standard Python package structure with the main source code located in the `src` directory.
+The project follows a standard Python package structure.
 
 ```
 /
@@ -12,144 +12,63 @@ The project follows a standard Python package structure with the main source cod
 ├── src/
 │   └── eqcycles/           # The main Python package
 │       ├── __init__.py
-│       ├── analysis/
-│       │   ├── __init__.py
-│       │   ├── geometry.py
-│       │   └── rupture.py
 │       ├── core/
-│       │   ├── __init__.py
-│       │   ├── data.py
-│       │   └── exceptions.py
+│       │   ├── data.py         # Core data structures
 │       ├── io/
-│       │   ├── __init__.py
-│       │   ├── base.py
-│       │   └── hbi.py
+│       │   ├── base.py         # Abstract data loader
+│       │   └── hbi.py          # Concrete loader for HBI data
+│       ├── analysis/
+│       │   ├── geometry.py     # Fault geometry projections
+│       │   ├── rupture.py      # Rupture propagation analysis
+│       │   ├── scoring.py      # Catalog similarity scoring
+│       │   └── synthetic.py    # Synthetic data generation
 │       └── vis/
-│           ├── __init__.py
-│           ├── rupture_sequence.py
-│           ├── slip_rate_video.py
-│           └── utils.py
-├── scripts/                # Standalone scripts for execution
-│   ├── plot_rupture.py
-│   └── render_video.py
-└── tests/                  # Unit and integration tests
-    ├── __init__.py
-    └── test_data_loader.py
-
+│           ├── rupture_sequence.py             # Rupture plots with PyGMT
+│           ├── rupture_sequence_matplotlib.py  # Rupture plots with Matplotlib
+│           ├── slip_rate_video.py              # Slip rate video rendering
+│           └── utils.py                        # Visualization utilities
+└── ...
 ```
 
-## 2. Unit Testing
+## 2. Module Descriptions
 
-To ensure the reliability of the data loading and processing components, a dedicated test suite should be maintained in the `tests/` directory.
+The package is organized into four main sub-packages: `core`, `io`, `analysis`, and `vis`.
 
-**Framework:** `pytest` is recommended for its simplicity and powerful features.
+### Core (`src/eqcycles/core`)
 
-**`tests/test_data_loader.py`:**
-*   **Purpose:** Verify that the `HBILoader` correctly loads data, handles different file formats, and returns a well-formed `SimulationData` object.
-*   **Strategy:**
-    1.  Create a fixture that generates a set of temporary, valid dummy data files (`xyz.dat`, `time.dat`, `vel.dat`, etc.) and a dummy mesh file.
-    2.  Write a test function that uses this fixture to run the `HBILoader`.
-    3.  Assert that the shape, data types, and values of the loaded numpy arrays and pandas DataFrames are correct.
-    4.  Test edge cases, such as missing files or malformed data, and assert that the appropriate exceptions are raised.
+*   **`data.py`**: This module defines the core data structure for the entire package, the `SimulationData` dataclass. It acts as a standardized container for all simulation outputs, including slip rate, stress, time series, mesh information, and the earthquake catalog. It also provides a method to subset the data by a time range.
 
-Running tests can be done using the `pytest` command from the root directory.
+### Input/Output (`src/eqcycles/io`)
 
-## 3. Module Details & Migration Strategy
+This sub-package handles loading data from different simulation formats.
 
-The following sections outline what code goes where.
+*   **`base.py`**: Defines the `BaseLoader` abstract base class. This ensures that any new loader for a different simulation type will adhere to a common `load` method that returns a standardized `SimulationData` object, making the package modular.
+*   **`hbi.py`**: A concrete implementation of `BaseLoader` for reading data from HBI (tandem-running code) simulations. It handles HBI's specific binary file formats and packages the data into the standard `SimulationData` object.
 
-### A. Core Data (core/data.py)
+### Analysis (`src/eqcycles/analysis`)
 
-We separate the data structure from the file reading. This class is just a container.
+This sub-package contains modules for performing scientific analysis on the simulation data.
 
-**Class: `SimulationData`**
+*   **`geometry.py`**: Contains functions for geometric analysis. Its primary function, `project_to_fault_trace`, takes 3D simulation coordinates and projects them onto a 1D fault trace defined by a shapefile, calculating the along-strike distance for each point.
+*   **`rupture.py`**: Focuses on analyzing individual earthquake ruptures. It provides functions to determine the spatial extent of a rupture (`get_rupture_mask`) and to analyze its propagation direction (`analyze_rupture_direction`), including distinguishing between unilateral and bilateral ruptures.
+*   **`scoring.py`**: Implements a sophisticated scoring mechanism to compare earthquake catalogs (e.g., simulation vs. historical). It uses Optimal Transport (OT) to measure the "distance" between two space-time distributions of events, providing a quantitative similarity score.
+*   **`synthetic.py`**: To facilitate testing and validation, this module provides tools to generate synthetic data. It can create simple linear fault geometries and populate them with synthetic earthquake catalogs.
 
-**Attributes:**
-* Standardized arrays: `slip_rate`, `shear_stress`, `state_variable`, `time`, `coords`.
-* `mesh`: Contains vertices, triangles (using `meshio` objects).
-* `catalog`: A Pandas DataFrame for events (standardized column names).
+### Visualization (`src/eqcycles/vis`)
 
-**Methods:**
-* `subset_time(t_start, t_end)`: Returns a new `SimulationData` object sliced in time.
+This sub-package is dedicated to creating plots and animations from the data.
 
-### B. Input/Output (io/)
+*   **`rupture_sequence.py`**: Generates space-time plots of earthquake rupture sequences using the `pygmt` library.
+*   **`rupture_sequence_matplotlib.py`**: An alternative implementation for plotting rupture sequences using the `matplotlib` library. It provides similar functionality, including plotting rupture direction arrows.
+*   **`slip_rate_video.py`**: Renders MP4 videos of the slip rate evolution across the fault mesh over time using `matplotlib` and `ffmpeg`.
+*   **`utils.py`**: A collection of helper functions and constants for visualization, such as custom colormap generators, time label formatters, and default plot settings.
 
-This handles the "Extension" requirement. You can add `pylith.py` later without breaking existing code.
+## 3. Development Workflow
 
-**`io/base.py` (Abstract Interface):**
-```python
-from abc import ABC, abstractmethod
+The modular design supports an iterative development workflow:
 
-class BaseLoader(ABC):
-    @abstractmethod
-    def load(self, path: str) -> SimulationData:
-        """Must return a standardized SimulationData object."""
-        pass
-```
+*   **Adding a New Data Source**: Create a new loader class in the `io` directory that inherits from `BaseLoader` and implements the `load` method.
+*   **Adding a New Analysis**: Create a new file in the `analysis` directory. The functions should take a `SimulationData` object as input and return processed data (e.g., numbers, arrays, or pandas DataFrames).
+*   **Adding a New Plot**: Create a new file in the `vis` directory. The plotting function should take a `SimulationData` object and any pre-processed analysis results as input.
 
-**`io/hbi.py` (Concrete Implementation):**
-* **Logic:** Move the `load_field`, binary reshaping, and `meshio` reading logic here.
-* **Arguments:** Accepts `base_dir` and `run_id`.
-* **Output:** Returns `SimulationData`.
-
-### C. Analysis (analysis/)
-
-Isolating math from plotting allows you to "score" simulations later without generating images.
-
-**`analysis/geometry.py`:**
-* **Logic:** Move `get_reference_trace` and `map_mesh_to_strike` here.
-* **Function:** `project_to_fault_trace(coords, shapefile_path)` -> returns 1D distance array.
-
-**`analysis/rupture.py`:**
-* **Logic:** Move `analyze_rupture_direction` and `get_rupture_mask` here.
-* **New Feature:** Create a class `RuptureMetrics` that stores slope, R2, and direction code, separating the calculation from the print statement.
-
-### D. Visualization (vis/)
-
-This fulfills your requirement for "single .py for a single plot type".
-
-**`vis/utils.py`:**
-* **Content:**
-    * `get_continuous_cmap()` (from your video script).
-    * Standardized plot settings (font sizes, default DPI).
-    * Helper to format time labels (Seconds -> Years).
-
-**`vis/rupture_sequence.py`:**
-* **Dependencies:** `pygmt`, `core.data`, `analysis.rupture`.
-* **Class/Function:** `plot(sim_data, rupture_metrics, output_path, config=None)`.
-* **Logic:** Pure PyGMT calls. It receives processed data (like rupture direction), it does not calculate it.
-
-**`vis/slip_rate_video.py`:**
-* **Dependencies:** `matplotlib`, `multiprocessing`.
-* **Class:** `VideoRenderer`.
-* **Logic:** Contains the `process_frame` function and the `ffmpeg` subprocess calls.
-
-## 3. Development Workflow (Step-by-Step)
-
-Here is how I recommend you build this:
-
-**Step 1: The Skeleton** Create the folders and empty `__init__.py` files.
-
-**Step 2: The Loader (The Foundation)** Move your `Simulation_data` class to `core/data.py`. Move the `load()` method logic to `io/hbi.py`. Test: Write a tiny script that loads data and prints `sim.slip_rate.shape`.
-
-**Step 3: Geometry & Analysis** Move `map_mesh_to_strike` to `analysis/geometry.py`. Move `analyze_rupture_direction` to `analysis/rupture.py`. Refactor: Ensure these functions take `SimulationData` as input and return standard Python types (lists/dicts/DataFrames), not plot objects.
-
-**Step 4: The Visualization Refactor** Create `vis/rupture_sequence.py`. Import your new loader and analysis modules. Copy the PyGMT logic. Replace the raw variable access with your new `SimulationData` attributes.
-
-**Step 5: The Scripts** Create `scripts/plot_rupture.py`. It should look like this:
-
-```python
-from eqcycles.io.hbi import HBILoader
-from eqcycles.vis.rupture_sequence import plot_rupture_sequence
-
-loader = HBILoader(run_id='7')
-sim_data = loader.load('./output/')
-plot_rupture_sequence(sim_data, "rupture.png")
-```
-
-## 4. Future Extensibility Check
-
-* **New Solver?** Create `io/pylith.py`.
-* **New Plot?** Create `vis/stress_drop_map.py`.
-* **New Analysis?** Create `analysis/scoring.py` (e.g., comparing `sim.catalog` vs `historical_catalog`).
-
+This structure ensures that data loading, analysis, and visualization are decoupled, making the codebase easier to maintain and extend.
