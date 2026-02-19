@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 import numpy as np
 import pandas as pd
 import meshio # Assuming meshio objects will be stored directly
@@ -9,11 +10,6 @@ class SimulationData:
     A standardized container for simulation output data.
     """
     # Standardized arrays
-    slip_rate: np.ndarray    # log10(abs(vel)) from vel*.dat
-    state_variable: np.ndarray # psi from psi*.dat
-    shear_stress: np.ndarray # tau from tau*.dat
-    normal_stress: np.ndarray # sigma from sigma*.dat (added from plot_eq_sequance.py)
-    slip: np.ndarray        # slip from slip*.dat (added for diagnostics)
     time: np.ndarray         # time from time*.dat (in years)
     coords: np.ndarray       # xyz coordinates from xyz*.dat
 
@@ -26,6 +22,13 @@ class SimulationData:
     eq_slip: np.ndarray      # EQslip*.dat data
     catalog: pd.DataFrame    # event*.dat data as a Pandas DataFrame
     
+    # Optional heavy fields
+    slip_rate: Optional[np.ndarray] = None    # log10(abs(vel)) from vel*.dat
+    state_variable: Optional[np.ndarray] = None # psi from psi*.dat
+    shear_stress: Optional[np.ndarray] = None # tau from tau*.dat
+    normal_stress: Optional[np.ndarray] = None # sigma from sigma*.dat (added from plot_eq_sequance.py)
+    slip: Optional[np.ndarray] = None        # slip from slip*.dat (added for diagnostics)
+
     def subset_time(self, t_start: float, t_end: float) -> 'SimulationData':
         """
         Returns a new SimulationData object sliced by time.
@@ -47,6 +50,8 @@ class SimulationData:
 
         # Helper to safely subset data arrays that have time as the last dimension
         def _subset_if_time_dependent(arr):
+            if arr is None:
+                return None
             # Check if the last dimension matches the original number of timesteps
             # before applying the mask. This handles arrays that might not have a
             # time dimension (e.g., coords, which is (N_cells, 3))
@@ -56,16 +61,16 @@ class SimulationData:
 
         # Apply subsetting to all time-dependent arrays
         return SimulationData(
-            slip_rate=_subset_if_time_dependent(self.slip_rate),
-            state_variable=_subset_if_time_dependent(self.state_variable),
-            shear_stress=_subset_if_time_dependent(self.shear_stress),
-            normal_stress=_subset_if_time_dependent(self.normal_stress),
-            slip=_subset_if_time_dependent(self.slip),
             time=self.time[time_mask],
             coords=self.coords, # Coords are not time-dependent
             mesh=self.mesh, # Mesh object is not time-dependent
             mesh_verts=self.mesh_verts, # Mesh vertices are not time-dependent
             mesh_limits=self.mesh_limits, # Mesh limits are not time-dependent
             eq_slip=_subset_if_time_dependent(self.eq_slip),
-            catalog=self.catalog[(self.catalog['Time_year'] >= t_start) & (self.catalog['Time_year'] <= t_end)].reset_index(drop=True)
+            catalog=self.catalog[(self.catalog['Time_year'] >= t_start) & (self.catalog['Time_year'] <= t_end)].reset_index(drop=True),
+            slip_rate=_subset_if_time_dependent(self.slip_rate),
+            state_variable=_subset_if_time_dependent(self.state_variable),
+            shear_stress=_subset_if_time_dependent(self.shear_stress),
+            normal_stress=_subset_if_time_dependent(self.normal_stress),
+            slip=_subset_if_time_dependent(self.slip)
         )

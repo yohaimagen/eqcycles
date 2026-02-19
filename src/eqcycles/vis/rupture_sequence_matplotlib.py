@@ -26,6 +26,7 @@ def plot_rupture_sequence_matplotlib(
     add_rupture_direction: bool = False,
     ploting_mag_treshold: float = 7.0,
     add_catalog_index: bool = False,
+    title: str = "Rupture Sequence",
     verbose: bool = False
 ):
     """
@@ -64,7 +65,7 @@ def plot_rupture_sequence_matplotlib(
     ax.set_xlabel("Distance Along Strike [km]")
     ax.set_ylabel("Time [years]")
     ax.set_title(
-        "Rupture Sequence", 
+        title, 
         fontsize=int(cfg["font_size_title"]), 
         fontweight=cfg["font_weight_title"]
     )
@@ -136,8 +137,8 @@ def plot_rupture_sequence_matplotlib(
                         arrow_length_data = 30
                         # print(f'arrow_length_data : {arrow_length_data}')
                         arrow_props = dict(
-                            head_width=0.01 * max_time,
-                            head_length=0.02 * (x_max_km - x_min_km),
+                            head_width=50,
+                            head_length=25,
                             fc='k',
                             ec='k',
                             lw=1
@@ -152,21 +153,21 @@ def plot_rupture_sequence_matplotlib(
                         # Unilateral, left-pointing arrow (prop. along increasing mesh_along_strike)
                         if metrics.code == 1:
                             dx = -arrow_length_data    # Negative dx = points LEFT
-                            ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props)
+                            ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props, zorder=10)
                         
                         # Unilateral, right-pointing arrow (prop. along decreasing mesh_along_strike)
                         elif metrics.code == -1:
                             dx = arrow_length_data     # Positive dx = points RIGHT
-                            ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props)
+                            ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props, zorder=10)
 
                         # Bilateral, two arrows from hypocenter
                         elif metrics.code == 2 and metrics.hypocenter_dist is not None:
 
                             # Arrow 1: left-pointing (for propagation along increasing mesh_along_strike)
-                            ax.arrow(x_hypo, y_hypo, -arrow_length_data, 0, **arrow_props)
+                            ax.arrow(x_hypo, y_hypo, -arrow_length_data, 0, **arrow_props, zorder=10)
                             
                             # Arrow 2: right-pointing (for propagation along decreasing mesh_along_strike)
-                            ax.arrow(x_hypo, y_hypo, arrow_length_data, 0, **arrow_props)
+                            ax.arrow(x_hypo, y_hypo, arrow_length_data, 0, **arrow_props, zorder=10)
 
                 except Exception as e:
                     print(f"    Warning: Direction analysis failed for event {idx}: {e}")

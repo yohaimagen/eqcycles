@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import meshio
 from pathlib import Path
+from typing import Optional, List
 
 from eqcycles.core.data import SimulationData
 from eqcycles.io.base import BaseLoader
@@ -16,13 +17,23 @@ class HBILoader(BaseLoader):
             raise FileNotFoundError(f"Mesh file not found: {mesh_path}")
         self.mesh_path = mesh_path
 
-    def load(self, path: str, run_id: str) -> SimulationData:
+    def load(self,
+             path: str,
+             run_id: str,
+             load_heavy_fields: bool = False,
+             fields_to_load: Optional[List[str]] = None) -> SimulationData:
         """
         Loads simulation data from HBI binary files in the specified directory.
         
         Args:
             path: Path to the directory containing the .dat files.
             run_id: The identifier suffix for the files (e.g., '1', '205').
+            load_heavy_fields: If True, load all heavy time-dependent fields.
+                               This overrides fields_to_load.
+            fields_to_load: A list of specific heavy fields to load if 
+                            load_heavy_fields is False.
+                            Options: 'slip_rate', 'state_variable', 'shear_stress',
+                            'normal_stress', 'slip'.
         
         Returns:
             A standardized SimulationData object.
@@ -94,14 +105,27 @@ class HBILoader(BaseLoader):
                 
             return data_reshaped
 
-        # 4. Load all fields
-        # Note: slip_rate is log10(abs(vel))
-        sr_data_raw = _load_and_reshape_field(f"vel{run_id}.dat")
-        slip_rate = np.log10(np.abs(sr_data_raw)) # Add small epsilon to avoid log(0)
-        state_variable = _load_and_reshape_field(f"psi{run_id}.dat")
-        shear_stress = _load_and_reshape_field(f"tau{run_id}.dat")
-        normal_stress = _load_and_reshape_field(f"sigma{run_id}.dat")
-        slip = _load_and_reshape_field(f"slip{run_id}.dat")
+        # 4. Load specified fields
+        slip_rate, state_variable, shear_stress, normal_stress, slip = [None] * 5
+        
+        fields_to_load_internal = []
+        if load_heavy_fields:
+            fields_to_load_internal = ['slip_rate', 'state_variable', 'shear_stress', 'normal_stress', 'slip']
+        elif fields_to_load:
+            fields_to_load_internal = fields_to_load
+
+        if 'slip_rate' in fields_to_load_internal:
+            # Note: slip_rate is log10(abs(vel))
+            sr_data_raw = _load_and_reshape_field(f"vel{run_id}.dat")
+            slip_rate = np.log10(np.abs(sr_data_raw)) # Add small epsilon to avoid log(0)
+        if 'state_variable' in fields_to_load_internal:
+            state_variable = _load_and_reshape_field(f"psi{run_id}.dat")
+        if 'shear_stress' in fields_to_load_internal:
+            shear_stress = _load_and_reshape_field(f"tau{run_id}.dat")
+        if 'normal_stress' in fields_to_load_internal:
+            normal_stress = _load_and_reshape_field(f"sigma{run_id}.dat")
+        if 'slip' in fields_to_load_internal:
+            slip = _load_and_reshape_field(f"slip{run_id}.dat")
         
         # Load EQ slip data
         eq_slip_file = base_path / f"EQslip{run_id}.dat"
@@ -130,16 +154,16 @@ class HBILoader(BaseLoader):
         catalog['Time_year'] = catalog['Time_sec'] / (365*24*60*60)
         
         return SimulationData(
-            slip_rate=slip_rate,
-            state_variable=state_variable,
-            shear_stress=shear_stress,
-            normal_stress=normal_stress,
-            slip=slip,
             time=time_data,
             coords=coords,
             mesh=mesh,
             mesh_verts=mesh_verts,
             mesh_limits=mesh_limits,
             eq_slip=eq_slip,
-            catalog=catalog
+            catalog=catalog,
+            slip_rate=slip_rate,
+            state_variable=state_variable,
+            shear_stress=shear_stress,
+            normal_stress=normal_stress,
+            slip=slip
         )
