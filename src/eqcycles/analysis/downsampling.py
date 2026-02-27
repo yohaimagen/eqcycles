@@ -5,55 +5,31 @@ from typing import List, Tuple, Optional, Union
 from pathlib import Path
 import pandas as pd
 from eqcycles.core.data import SimulationData
-from numba import njit
-from joblib import Parallel, delayed
+from numba import njit, prange
 
 def calculate_triangle_areas(mesh: meshio.Mesh) -> np.ndarray:
-    """
-    Calculates the surface area of each triangle cell in the mesh.
-    
-    Args:
-        mesh: A meshio.Mesh object containing 'triangle' cells.
-        
-    Returns:
-        np.ndarray: An array of areas for each triangle.
-    """
     if "triangle" not in mesh.cells_dict:
         raise ValueError("Mesh does not contain 'triangle' cells.")
-    
     triangles = mesh.cells_dict["triangle"]
     points = mesh.points
-    
     v0 = points[triangles[:, 0]]
     v1 = points[triangles[:, 1]]
     v2 = points[triangles[:, 2]]
-    
-    # Area = 0.5 * |(v1 - v0) x (v2 - v0)|
     cross_product = np.cross(v1 - v0, v2 - v0)
     areas = 0.5 * np.linalg.norm(cross_product, axis=1)
-    
     return areas
 
 def get_triangle_centroids(mesh: meshio.Mesh) -> np.ndarray:
-    """
-    Calculates the centroids of all triangle cells in the mesh.
-    
-    Args:
-        mesh: A meshio.Mesh object.
-        
-    Returns:
-        np.ndarray: (N, 3) array of centroids.
-    """
     triangles = mesh.cells_dict["triangle"]
     points = mesh.points
     centroids = points[triangles].mean(axis=1)
     return centroids
 
-@njit
-def _aggregate_1d(field, indices, offsets, weights, n_target):
-    """Numba-accelerated aggregation for 1D fields."""
+@njit(parallel=True)
+def _aggregate_1d_numba(field, indices, offsets, weights, n_target):
+    """Numba-accelerated parallel aggregation for 1D fields."""
     target_field = np.zeros(n_target, dtype=field.dtype)
-    for j in range(n_target):
+    for j in prange(n_target):
         start = offsets[j]
         end = offsets[j+1]
         val = 0.0
@@ -67,12 +43,12 @@ def _aggregate_1d(field, indices, offsets, weights, n_target):
             target_field[j] = val / total_w
     return target_field
 
-@njit
-def _aggregate_2d(field, indices, offsets, weights, n_target):
-    """Numba-accelerated aggregation for 2D fields."""
+@njit(parallel=True)
+def _aggregate_2d_numba(field, indices, offsets, weights, n_target):
+    """Numba-accelerated parallel aggregation for 2D fields."""
     ntime = field.shape[1]
     target_field = np.zeros((n_target, ntime), dtype=field.dtype)
-    for j in range(n_target):
+    for j in prange(n_target):
         start = offsets[j]
         end = offsets[j+1]
         
@@ -98,25 +74,13 @@ def downsample_simulation(
     run_id: str = "downsampled"
 ) -> SimulationData:
     """
-    Downsamples simulation data with vectorized search and field-level parallelism.
-    
-    Args:
-        high_res_data: The source SimulationData object.
-        target_mesh: The target meshio.Mesh object or path.
-        scale_factor: Multiplier for search radius (default 1.2).
-        z_limit: Depth threshold for boundary filtering (default -18.0 km).
-        output_dir: Optional directory to save the downsampled data.
-        run_id: Suffix for saved files if output_dir is provided.
-        
-    Returns:
-        SimulationData: A new SimulationData object with downsampled fields.
+    Downsamples simulation data using Numba's internal multithreading.
     """
     # 1. Geometry and Area Extraction
     if isinstance(target_mesh, (str, Path)):
         target_mesh = meshio.read(target_mesh)
     source_areas = calculate_triangle_areas(high_res_data.mesh)
     source_centroids = get_triangle_centroids(high_res_data.mesh)
-    
     target_areas = calculate_triangle_areas(target_mesh)
     target_centroids = get_triangle_centroids(target_mesh)
     
@@ -135,17 +99,14 @@ def downsample_simulation(
     
     for j, indices in enumerate(all_neighbors):
         z_target = target_centroids[j, 2]
-        # Filtering crossing the frictional transition at z_limit
         filtered = [
             idx for idx in indices 
             if not ((z_target > z_limit and source_z[idx] < z_limit) or 
                     (z_target < z_limit and source_z[idx] > z_limit))
         ]
-        
         if not filtered:
             _, idx = tree.query(target_centroids[j], k=1)
             filtered = [idx]
-            
         target_neighbor_indices.append(filtered)
         for idx in filtered:
             source_claim_counts[idx] += 1
@@ -162,20 +123,22 @@ def downsample_simulation(
             src_idx = indices_flat[k]
             weights_flat[k] = source_areas[src_idx] / source_claim_counts[src_idx]
 
-    # 4. Data Aggregation (Parallelize at the field level)
-    def _do_aggregation(field):
+    # 4. Data Aggregation (Sequential calls to Parallel JIT functions)
+    def apply_mapping(field: np.ndarray) -> Optional[np.ndarray]:
         if field is None: return None
         if field.ndim == 1:
-            return _aggregate_1d(field, indices_flat, offsets, weights_flat, n_target)
+            return _aggregate_1d_numba(field, indices_flat, offsets, weights_flat, n_target)
         else:
-            return _aggregate_2d(field, indices_flat, offsets, weights_flat, n_target)
+            return _aggregate_2d_numba(field, indices_flat, offsets, weights_flat, n_target)
 
-    field_names = ['slip', 'shear_stress', 'normal_stress', 'state_variable', 'slip_rate', 'eq_slip']
-    fields = [getattr(high_res_data, name) for name in field_names]
-    
-    # One process for each simulation field
-    results = Parallel(n_jobs=len(field_names))(delayed(_do_aggregation)(f) for f in fields)
-    field_mapping = dict(zip(field_names, results))
+    field_mapping = {
+        'slip': apply_mapping(high_res_data.slip),
+        'shear_stress': apply_mapping(high_res_data.shear_stress),
+        'normal_stress': apply_mapping(high_res_data.normal_stress),
+        'state_variable': apply_mapping(high_res_data.state_variable),
+        'slip_rate': apply_mapping(high_res_data.slip_rate),
+        'eq_slip': apply_mapping(high_res_data.eq_slip)
+    }
 
     # 5. Catalog Mapping
     new_catalog = high_res_data.catalog.copy()
@@ -209,8 +172,6 @@ def downsample_simulation(
         normal_stress=field_mapping['normal_stress'],
         slip=field_mapping['slip']
     )
-    
     if output_dir:
         result.save(output_dir, run_id=run_id)
-        
     return result
