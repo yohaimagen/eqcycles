@@ -74,3 +74,57 @@ class SimulationData:
             normal_stress=_subset_if_time_dependent(self.normal_stress),
             slip=_subset_if_time_dependent(self.slip)
         )
+
+    def save(self, output_dir: str, run_id: str = "downsampled") -> None:
+        """
+        Saves the SimulationData to a directory in a format compatible with HBILoader.
+        
+        Args:
+            output_dir: The directory to save the files into.
+            run_id: The suffix to use for the filenames.
+        """
+        from pathlib import Path
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        
+        # Save Mesh
+        mesh_path = out / f"mesh_{run_id}.msh"
+        self.mesh.write(mesh_path)
+        
+        # Save Coords
+        np.savetxt(out / f"xyz{run_id}.dat", self.coords)
+        
+        # Save Time
+        # HBI format usually has (idx, time_sec). We reconstruct a simple version.
+        time_sec = self.time * (365 * 24 * 3600)
+        time_out = np.column_stack([np.arange(len(time_sec)), time_sec])
+        np.savetxt(out / f"time{run_id}.dat", time_out)
+        
+        # Save Catalog
+        # Reconstruct HBI format if possible, but at least save the current columns
+        self.catalog.to_csv(out / f"event{run_id}.dat", sep=' ', index=False, header=False)
+        
+        # Save Fields
+        def _save_field(arr, name):
+            if arr is not None:
+                # Reshape back to (ntime * ncell) and save as binary
+                # Original loader did: data_reshaped = data_raw.reshape(ntime, ncell).T
+                # So we need to transpose back to (ntime, ncell) then flatten
+                if arr.ndim == 2:
+                    data_to_save = arr.T.flatten()
+                else:
+                    data_to_save = arr.flatten()
+                data_to_save.astype(np.float64).tofile(out / f"{name}{run_id}.dat")
+
+        _save_field(self.eq_slip, "EQslip")
+        # For slip_rate, we store log10(V), but HBI expects V?
+        # HBILoader does: slip_rate = np.log10(np.abs(sr_data_raw))
+        # So we should save 10^slip_rate
+        if self.slip_rate is not None:
+            v_data = 10**self.slip_rate
+            v_data.T.flatten().astype(np.float64).tofile(out / f"vel{run_id}.dat")
+            
+        _save_field(self.state_variable, "psi")
+        _save_field(self.shear_stress, "tau")
+        _save_field(self.normal_stress, "sigma")
+        _save_field(self.slip, "slip")

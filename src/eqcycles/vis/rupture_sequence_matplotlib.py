@@ -27,6 +27,7 @@ def plot_rupture_sequence_matplotlib(
     ploting_mag_treshold: float = 7.0,
     add_catalog_index: bool = False,
     title: str = "Rupture Sequence",
+    rupture_color: str = 'red',
     verbose: bool = False
 ):
     """
@@ -102,8 +103,8 @@ def plot_rupture_sequence_matplotlib(
             np.full_like(rup_locs_km, eq_time_yr), 
             'o',
             markersize=2,
-            color='red', 
-            markeredgecolor='red',
+            color=rupture_color, 
+            markeredgecolor=rupture_color,
             markeredgewidth=0.1
         )
         

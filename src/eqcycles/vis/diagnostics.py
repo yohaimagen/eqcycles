@@ -14,6 +14,8 @@ def plot_point_timeseries(
     params: List[str],
     point: Tuple[float, float],
     time_window: Optional[Tuple[float, float]] = None,
+    fig: Optional[plt.Figure] = None,
+    axes: Optional[np.ndarray] = None,
     **kwargs
 ) -> Tuple[plt.Figure, np.ndarray]:
     """
@@ -35,11 +37,8 @@ def plot_point_timeseries(
         raise ValueError("The 'params' list cannot be empty.")
 
     # Create N subplots, where N is the number of parameters, with a shared x-axis.
-    fig, axes = plt.subplots(
-        len(params), 1, 
-        figsize=kwargs.get('figsize', (12, 4 * len(params))), 
-        sharex=True
-    )
+    if fig is None or axes is None:
+        fig, axes = plt.subplots(len(params), 1, figsize=kwargs.get('figsize', (10, 5 * len(params))), sharex=True)
     # Ensure `axes` is always an array, even if there's only one subplot.
     axes = np.atleast_1d(axes)
 
@@ -109,9 +108,13 @@ def plot_3d_snapshot(
 
     # 1. Data Selection
     if not hasattr(sim_data, param):
-        raise ValueError(f"Parameter '{param}' not found in SimulationData object.")
+        raise ValueError(f"Parameter '{param}' not found in SimulationData object. Make sure you actually loaded it and that the name is correct.")
     
     param_data = getattr(sim_data, param)
+    if param_data is None:
+        raise ValueError(f"Parameter '{param}' is None in SimulationData object.")
+    if param_data.ndim != 2:
+        raise ValueError(f"Parameter '{param}' should be a 2D array (n_nodes x n_time_steps).")
     time_step_index = np.argmin(np.abs(sim_data.time - target_time_year))
     param_at_time_step = param_data[:, time_step_index]
     time_val = sim_data.time[time_step_index]
