@@ -90,23 +90,33 @@ class SimulationData:
         # Save Mesh
         mesh_path = out / f"mesh_{run_id}.msh"
         # Explicitly use gmsh22 format as it is standard for HBI/Tandem
-        # Filter cells to only include those supported or intended for simulation
+        # Filter cells and cell_data to only include those supported or intended for simulation
         supported_cells = ["triangle", "quad", "tetra", "hexahedron"]
-        filtered_cells = [
-            (cell_block.type, cell_block.data) 
-            for cell_block in self.mesh.cells 
+        
+        keep_indices = [
+            i for i, cell_block in enumerate(self.mesh.cells) 
             if cell_block.type in supported_cells
         ]
-        if not filtered_cells:
-            # Fallback to whatever is there if no standard cells found, 
-            # but this helps avoid the 'line' cell error in some writers.
+        
+        if not keep_indices:
             filtered_cells = self.mesh.cells
+            filtered_cell_data = self.mesh.cell_data
+        else:
+            filtered_cells = [self.mesh.cells[i] for i in keep_indices]
+            filtered_cell_data = {}
+            for key, data_list in self.mesh.cell_data.items():
+                if len(data_list) == len(self.mesh.cells):
+                    filtered_cell_data[key] = [data_list[i] for i in keep_indices]
+                else:
+                    # If for some reason the data_list length doesn't match original cells, 
+                    # we can't reliably filter it by index.
+                    filtered_cell_data[key] = data_list
             
         mesh_to_save = meshio.Mesh(
             points=self.mesh.points,
             cells=filtered_cells,
             point_data=self.mesh.point_data,
-            cell_data=self.mesh.cell_data
+            cell_data=filtered_cell_data
         )
         mesh_to_save.write(mesh_path, file_format="gmsh22")
         
