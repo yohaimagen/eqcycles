@@ -150,7 +150,6 @@ def test_saving(synthetic_data, tmp_path):
     )
     
     # Check if files exist
-    assert (output_dir / "mesh_test_run.msh").exists()
     assert (output_dir / "xyztest_run.dat").exists()
     assert (output_dir / "timetest_run.dat").exists()
     assert (output_dir / "eventtest_run.dat").exists()

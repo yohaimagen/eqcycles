@@ -78,6 +78,7 @@ class SimulationData:
     def save(self, output_dir: str, run_id: str = "downsampled") -> None:
         """
         Saves the SimulationData to a directory in a format compatible with HBILoader.
+        Note: This only saves the simulation arrays (.dat files), not the mesh file itself.
         
         Args:
             output_dir: The directory to save the files into.
@@ -86,39 +87,6 @@ class SimulationData:
         from pathlib import Path
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
-        
-        # Save Mesh
-        mesh_path = out / f"mesh_{run_id}.msh"
-        # Explicitly use gmsh22 format as it is standard for HBI/Tandem
-        # Filter cells and cell_data to only include those supported or intended for simulation
-        supported_cells = ["triangle", "quad", "tetra", "hexahedron"]
-        
-        keep_indices = [
-            i for i, cell_block in enumerate(self.mesh.cells) 
-            if cell_block.type in supported_cells
-        ]
-        
-        if not keep_indices:
-            filtered_cells = self.mesh.cells
-            filtered_cell_data = self.mesh.cell_data
-        else:
-            filtered_cells = [self.mesh.cells[i] for i in keep_indices]
-            filtered_cell_data = {}
-            for key, data_list in self.mesh.cell_data.items():
-                if len(data_list) == len(self.mesh.cells):
-                    filtered_cell_data[key] = [data_list[i] for i in keep_indices]
-                else:
-                    # If for some reason the data_list length doesn't match original cells, 
-                    # we can't reliably filter it by index.
-                    filtered_cell_data[key] = data_list
-            
-        mesh_to_save = meshio.Mesh(
-            points=self.mesh.points,
-            cells=filtered_cells,
-            point_data=self.mesh.point_data,
-            cell_data=filtered_cell_data
-        )
-        mesh_to_save.write(mesh_path, file_format="gmsh22")
         
         # Save Coords
         np.savetxt(out / f"xyz{run_id}.dat", self.coords)
