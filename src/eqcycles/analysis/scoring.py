@@ -2,7 +2,8 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import ot
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, Union, Optional
+from joblib import Parallel, delayed
 
 from eqcycles.core.data import SimulationData
 from eqcycles.analysis.geometry import project_to_fault_trace
@@ -145,9 +146,46 @@ def calculate_ot_score(
         masses1, masses2, cost_matrix, 
         reg=config['reg'], reg_m=config['reg_m']
     )
-    return score
+    return float(score)
 
-from typing import Tuple, Dict, Any, Union, Optional
+def _process_single_window(
+    t_start: float,
+    t_end: float,
+    window_edg: float,
+    sim_times: np.ndarray,
+    sim_coords: np.ndarray,
+    sim_masses_norm: np.ndarray,
+    norm_hist_coords: np.ndarray,
+    hist_masses_norm: np.ndarray,
+    config: Dict[str, Any]
+) -> Tuple[float, float]:
+    """Helper for parallel window processing."""
+    # Step 3: Fast slicing with searchsorted
+    idx_start = np.searchsorted(sim_times, t_start - window_edg, side='left')
+    idx_end = np.searchsorted(sim_times, t_end + window_edg, side='right')
+    
+    window_coords = sim_coords[idx_start:idx_end]
+    window_masses_subset = sim_masses_norm[idx_start:idx_end]
+    
+    if window_coords.shape[0] == 0:
+        return t_start, np.inf
+
+    # Time-shift window coordinates to start at t_start
+    relative_window_coords = window_coords.copy()
+    relative_window_coords[:, 1] -= t_start
+
+    # Normalize space and time
+    norm_window_coords = normalize_coords(
+        relative_window_coords, config['scale_x'], config['scale_t']
+    )
+
+    # Calculate score
+    score = calculate_ot_score(
+        norm_hist_coords, hist_masses_norm,
+        norm_window_coords, window_masses_subset,
+        config
+    )
+    return t_start, score
 
 def find_best_sequence(
     hist_coords: np.ndarray,
@@ -155,11 +193,12 @@ def find_best_sequence(
     sim_coords: np.ndarray,
     sim_masses: np.ndarray,
     config: Dict[str, Any],
-    window_edg: float = 50.0
+    window_edg: float = 50.0,
+    parallel_jobs: int = 10
 ) -> pd.DataFrame:
     """
     Finds the best match for a historical sequence in a simulation catalog
-    using a sliding window and Optimal Transport.
+    using a sliding window, Optimal Transport, and parallelization.
 
     Args:
         hist_coords: (N, 2) array of (along-strike location, time) for historical events.
@@ -180,55 +219,42 @@ def find_best_sequence(
         print("Warning: Simulation coordinates are empty.")
         return pd.DataFrame(columns=['time', 'score'])
 
-    # 1. Prepare Historical Data
+    # 1. Guarantee Chronological Sorting
+    sort_idx = np.argsort(sim_coords[:, 1])
+    sim_coords = sim_coords[sort_idx]
+    sim_masses = sim_masses[sort_idx]
+    sim_times = sim_coords[:, 1]
+
+    # 2. Prepare Historical Data (Pre-calculate shared values)
     hist_duration = hist_coords[:, 1].max() - hist_coords[:, 1].min()
     
-    # Normalize masses for stability
+    relative_hist_coords = hist_coords.copy()
+    relative_hist_coords[:, 1] -= hist_coords[:, 1].min()
+    norm_hist_coords = normalize_coords(
+        relative_hist_coords, config['scale_x'], config['scale_t']
+    )
+    
     hist_masses_norm = hist_masses / config['scale_mass']
     sim_masses_norm = sim_masses / config['scale_mass']
 
-    # 2. Initialize Sliding Window
-    sim_start_time = sim_coords[:, 1].min()
-    sim_end_time = sim_coords[:, 1].max()
+    # 3. Initialize Sliding Window
+    sim_start_time = sim_times.min()
+    sim_end_time = sim_times.max()
     step_years = config.get('step_years', 1.0)
     
     window_starts = np.arange(sim_start_time, sim_end_time - hist_duration, step_years)
-    results = []
 
-    # 3. Loop Through Windows
-    print(f"Scanning {len(window_starts)} windows...")
-    for t_start in window_starts:
-        t_end = t_start + hist_duration
-
-        # Create window subset
-        window_mask = (sim_coords[:, 1] >= t_start - window_edg) & (sim_coords[:, 1] < t_end + window_edg)
-        
-        window_coords = sim_coords[window_mask]
-        window_masses_subset = sim_masses_norm[window_mask]
-        
-        if window_coords.shape[0] == 0:
-            results.append((t_start, np.inf))
-            continue
-
-        # Time-shift both sets of coordinates to start at t=0
-        relative_hist_coords = hist_coords.copy()
-        relative_hist_coords[:, 1] -= hist_coords[:, 1].min()
-        
-        relative_window_coords = window_coords.copy()
-        relative_window_coords[:, 1] -= t_start
-
-        # Normalize space and time for both
-        norm_hist_coords = normalize_coords(relative_hist_coords, config['scale_x'], config['scale_t'])
-        norm_window_coords = normalize_coords(relative_window_coords, config['scale_x'], config['scale_t'])
-
-        # Calculate score
-        score = calculate_ot_score(
+    # 4. Joblib's Parallel Execution
+    print(f"Scanning {len(window_starts)} windows with Joblib parallelization...")
+    results = Parallel(n_jobs=parallel_jobs)(
+        delayed(_process_single_window)(
+            t_start, t_start + hist_duration, window_edg,
+            sim_times, sim_coords, sim_masses_norm,
             norm_hist_coords, hist_masses_norm,
-            norm_window_coords, window_masses_subset,
             config
-        )
-        results.append((t_start, score))
+        ) for t_start in window_starts
+    )
     
-    # 4. Finalize and Return
+    # 5. Reassemble and Return
     results_df = pd.DataFrame(results, columns=['time', 'score'])
     return results_df
