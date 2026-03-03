@@ -65,3 +65,16 @@ def project_to_fault_trace(sim_coords: np.ndarray, shapefile_path: str) -> np.nd
     node_along_strike = interp_dist[indices]
     
     return node_along_strike
+
+def get_geometry_context(shapefile_path: str):
+    """
+    Helper to get the reference line geometry and CRS.
+    """
+    if not os.path.exists(shapefile_path):
+        raise FileNotFoundError(f"Shapefile not found: {shapefile_path}")
+    
+    gdf = gpd.read_file(shapefile_path)
+    original_crs = gdf.crs
+    line_geom = gdf.to_crs(3857).geometry.iloc[0]
+    
+    return line_geom, original_crs

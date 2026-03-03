@@ -1,9 +1,15 @@
 from dataclasses import dataclass
 import numpy as np
+import pandas as pd
+import geopandas as gpd
+from shapely.geometry import LineString, MultiLineString, Point
+from shapely.ops import substring
+from itertools import groupby
 from sklearn.linear_model import LinearRegression
-from typing import Optional
+from typing import Optional, List, Tuple
 
 from eqcycles.core.data import SimulationData
+from eqcycles.analysis.geometry import get_geometry_context
 
 # --- Configuration Constants ---
 # These were previously in the main script body. It's better to have them here.
@@ -267,3 +273,84 @@ def analyze_rupture_direction(
     else:
         if verbose: print(f"    Rupture too small to analyze direction (extent_pos={extent_pos:.1f} km, extent_neg={extent_neg:.1f} km).")
         return RuptureMetrics(code=0)
+
+def export_ruptures_to_geodataframe(
+    sim_data: SimulationData,
+    mesh_along_strike: np.ndarray,
+    shapefile_path: str,
+    slip_threshold: float = 0.05,
+    min_mw: float = 7.0,
+    verbose: bool = False
+) -> gpd.GeoDataFrame:
+    """
+    Transforms the simulation catalog into a GeoDataFrame of ruptured polylines.
+    
+    For each event, it finds the easternmost and westernmost ruptured points (along strike)
+    and cuts the reference fault trace between these two points to define the rupture extent.
+    
+    Args:
+        sim_data: The loaded simulation data.
+        mesh_along_strike: Pre-calculated along-strike distances for each mesh node.
+        shapefile_path: Path to the reference fault trace shapefile.
+        slip_threshold: Slip threshold (m) to define rupture.
+        min_mw: Minimum magnitude to export.
+        verbose: If True, print progress.
+        
+    Returns:
+        A GeoDataFrame containing event metadata and the rupture geometries.
+    """
+    line_geom, original_crs = get_geometry_context(shapefile_path)
+    
+    records = []
+    
+    if verbose:
+        print(f"--> Exporting ruptures with Mw >= {min_mw} and slip threshold {slip_threshold}m")
+
+    for idx, event in sim_data.catalog.iterrows():
+        if event.Mw < min_mw:
+            continue
+        
+        # 1. Identify nodes that ruptured
+        slip_data = sim_data.eq_slip[:, idx]
+        is_rup = slip_data > slip_threshold
+        
+        if not np.any(is_rup):
+            if verbose: print(f"    Event {idx} (Mw {event.Mw:.1f}): No nodes exceeded slip threshold.")
+            continue
+            
+        # 2. Find easternmost and westernmost points (min/max along strike)
+        ruptured_dists = mesh_along_strike[is_rup]
+        d_min = np.min(ruptured_dists)
+        d_max = np.max(ruptured_dists)
+        
+        # 3. Cut the reference line using substring
+        # substring(geom, start_dist, end_dist)
+        try:
+            geom = substring(line_geom, d_min, d_max)
+            
+            if geom.is_empty:
+                continue
+                
+            # 4. Store record with metadata
+            record = event.to_dict()
+            record['geometry'] = geom
+            record['Event_ID_Sim'] = idx
+            record['Rupture_Start_m'] = d_min
+            record['Rupture_End_m'] = d_max
+            record['Rupture_Len_km'] = (d_max - d_min) / 1000.0
+            
+            records.append(record)
+            
+        except Exception as e:
+            if verbose: print(f"    Error processing event {idx}: {e}")
+            continue
+
+    if not records:
+        if verbose: print("    No ruptures found to export.")
+        return gpd.GeoDataFrame(columns=['geometry'], crs=original_crs)
+        
+    # 5. Create GeoDataFrame in EPSG:3857 and project back to original CRS
+    gdf_3857 = gpd.GeoDataFrame(records, crs="EPSG:3857")
+    gdf_original = gdf_3857.to_crs(original_crs)
+    
+    return gdf_original

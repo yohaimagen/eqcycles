@@ -121,7 +121,7 @@ class VideoRenderer:
         # This ffmpeg command ensures video dimensions are divisible by 2, a requirement for many codecs
         cmd = [
             'ffmpeg', '-y', '-framerate', '20',
-            '-i', str(frame_pattern),
+            '-pattern_type', 'glob', '-i', str(frame_pattern),
             '-vf', "scale=trunc(iw/2)*2:trunc(ih/2)*2",
             '-c:v', 'libx264',
             '-pix_fmt', 'yuv420p',

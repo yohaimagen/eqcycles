@@ -131,47 +131,47 @@ def plot_rupture_sequence_matplotlib(
                 )
             
             if add_rupture_direction:
-                try:
-                    metrics = analyze_rupture_direction(sim_data, idx, mesh_along_strike, verbose=verbose)
-                    
-                    if metrics and metrics.code != 0:
-                        arrow_length_data = 30
-                        # print(f'arrow_length_data : {arrow_length_data}')
-                        arrow_props = dict(
-                            head_width=50,
-                            head_length=25,
-                            fc='k',
-                            ec='k',
-                            lw=1
-                        )
-                        x_hypo = -metrics.hypocenter_dist * 1e-3
-                        y_hypo = metrics.hypocenter_time / (365 * 24 * 60 * 60)
-                        # Plot hypocenter star if data is available
-                        if metrics.hypocenter_dist is not None and metrics.hypocenter_time is not None:
-                            
-                            ax.plot(x_hypo, y_hypo, '*', color='yellow', markersize=10, markeredgecolor='black', zorder=10)
-
-                        # Unilateral, left-pointing arrow (prop. along increasing mesh_along_strike)
-                        if metrics.code == 1:
-                            dx = -arrow_length_data    # Negative dx = points LEFT
-                            ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props, zorder=10)
+                # try:
+                metrics = analyze_rupture_direction(sim_data, idx, mesh_along_strike, verbose=verbose)
+                
+                if metrics and metrics.code != 0:
+                    arrow_length_data = 30
+                    # print(f'arrow_length_data : {arrow_length_data}')
+                    arrow_props = dict(
+                        head_width=50,
+                        head_length=25,
+                        fc='k',
+                        ec='k',
+                        lw=1
+                    )
+                    x_hypo = -metrics.hypocenter_dist * 1e-3
+                    y_hypo = metrics.hypocenter_time / (365 * 24 * 60 * 60)
+                    # Plot hypocenter star if data is available
+                    if metrics.hypocenter_dist is not None and metrics.hypocenter_time is not None:
                         
-                        # Unilateral, right-pointing arrow (prop. along decreasing mesh_along_strike)
-                        elif metrics.code == -1:
-                            dx = arrow_length_data     # Positive dx = points RIGHT
-                            ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props, zorder=10)
+                        ax.plot(x_hypo, y_hypo, '*', color='yellow', markersize=10, markeredgecolor='black', zorder=10)
 
-                        # Bilateral, two arrows from hypocenter
-                        elif metrics.code == 2 and metrics.hypocenter_dist is not None:
+                    # Unilateral, left-pointing arrow (prop. along increasing mesh_along_strike)
+                    if metrics.code == 1:
+                        dx = -arrow_length_data    # Negative dx = points LEFT
+                        ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props, zorder=10)
+                    
+                    # Unilateral, right-pointing arrow (prop. along decreasing mesh_along_strike)
+                    elif metrics.code == -1:
+                        dx = arrow_length_data     # Positive dx = points RIGHT
+                        ax.arrow(x_hypo, y_hypo, dx, 0, **arrow_props, zorder=10)
 
-                            # Arrow 1: left-pointing (for propagation along increasing mesh_along_strike)
-                            ax.arrow(x_hypo, y_hypo, -arrow_length_data, 0, **arrow_props, zorder=10)
-                            
-                            # Arrow 2: right-pointing (for propagation along decreasing mesh_along_strike)
-                            ax.arrow(x_hypo, y_hypo, arrow_length_data, 0, **arrow_props, zorder=10)
+                    # Bilateral, two arrows from hypocenter
+                    elif metrics.code == 2 and metrics.hypocenter_dist is not None:
 
-                except Exception as e:
-                    print(f"    Warning: Direction analysis failed for event {idx}: {e}")
+                        # Arrow 1: left-pointing (for propagation along increasing mesh_along_strike)
+                        ax.arrow(x_hypo, y_hypo, -arrow_length_data, 0, **arrow_props, zorder=10)
+                        
+                        # Arrow 2: right-pointing (for propagation along decreasing mesh_along_strike)
+                        ax.arrow(x_hypo, y_hypo, arrow_length_data, 0, **arrow_props, zorder=10)
+
+                # except Exception as e:
+                #     print(f"    Warning: Direction analysis failed for event {idx}: {e}")
 
     if output_path is not None:
         print(f"--> Saving rupture plot to {output_path}")

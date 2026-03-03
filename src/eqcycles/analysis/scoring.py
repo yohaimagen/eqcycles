@@ -6,6 +6,7 @@ from typing import Tuple, Dict, Any
 
 from eqcycles.core.data import SimulationData
 from eqcycles.analysis.geometry import project_to_fault_trace
+from eqcycles.analysis.rupture import get_rupture_mask
 
 
 def prepare_event_data(
@@ -31,7 +32,6 @@ def prepare_event_data(
     if fault_gdf.empty:
         raise ValueError(f"Shapefile at {shapefile_path} is empty or could not be read.")
     
-    fault_line_geo = fault_gdf.geometry.iloc[0]
     # Use the UTM CRS appropriate for the fault's centroid
     planar_crs = fault_gdf.estimate_utm_crs()
     fault_line_planar = fault_gdf.to_crs(planar_crs).geometry.iloc[0]
@@ -49,8 +49,8 @@ def prepare_event_data(
     dist_start = np.array([fault_line_planar.project(point) for point in start_gdf.geometry])
     dist_end = np.array([fault_line_planar.project(point) for point in end_gdf.geometry])
 
-    # Location is the maximum distance along strike (most "easterly" point)
-    location_m = np.maximum(dist_start, dist_end)
+    # Location is the minimum distance along strike (most "easterly" point, assuming trace starts East)
+    location_m = np.minimum(dist_start, dist_end)
     # Mass is the rupture length
     mass_m = np.abs(dist_end - dist_start)
 
@@ -60,6 +60,63 @@ def prepare_event_data(
     coords = np.column_stack((location_m, time))
     
     return coords, mass_m
+
+
+def prepare_sim_event_data(
+    sim_data: SimulationData, 
+    shapefile_path: str,
+    mag_threshold: float = 7.0,
+    rupture_threshold: float = 0.05,
+    num_bins: int = 500
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Extracts event data from a SimulationData object for OT analysis.
+
+    Args:
+        sim_data: The SimulationData object.
+        shapefile_path: Path to the fault geometry shapefile.
+        mag_threshold: Minimum magnitude to include.
+        rupture_threshold: Slip threshold (m) to define rupture extent.
+        num_bins: Number of bins for spatial discretization.
+
+    Returns:
+        A tuple of (coords, masses):
+        - coords: (N, 2) array of (along-strike location, time).
+        - masses: (N,) array of rupture lengths.
+    """
+    mesh_along_strike = project_to_fault_trace(sim_data.coords, shapefile_path)
+    
+    coords = []
+    masses = []
+    
+    for idx, event in sim_data.catalog.iterrows():
+        if event.Mw < mag_threshold:
+            continue
+            
+        centers, is_rup = get_rupture_mask(
+            sim_data, 
+            idx, 
+            mesh_along_strike, 
+            num_bins=num_bins, 
+            slip_threshold=rupture_threshold
+        )
+        
+        if not np.any(is_rup):
+            continue
+            
+        rup_dists = centers[is_rup]
+        min_dist = np.min(rup_dists)
+        max_dist = np.max(rup_dists)
+        
+        # Location is the minimum distance along strike (easternmost point)
+        coords.append([min_dist, event.Time_year])
+        # Mass is the rupture length
+        masses.append(max_dist - min_dist)
+        
+    if not coords:
+        return np.array([]).reshape(0, 2), np.array([])
+        
+    return np.array(coords), np.array(masses)
 
 def normalize_coords(
     coords: np.ndarray, scale_x: float, scale_t: float
@@ -90,44 +147,47 @@ def calculate_ot_score(
     )
     return score
 
+from typing import Tuple, Dict, Any, Union, Optional
+
 def find_best_sequence(
-    sim_catalog: pd.DataFrame, 
-    historical_catalog: pd.DataFrame, 
-    shapefile_path: str, 
-    window_edg: float,
-    config: Dict[str, Any]
+    hist_coords: np.ndarray,
+    hist_masses: np.ndarray,
+    sim_coords: np.ndarray,
+    sim_masses: np.ndarray,
+    config: Dict[str, Any],
+    window_edg: float = 50.0
 ) -> pd.DataFrame:
     """
     Finds the best match for a historical sequence in a simulation catalog
     using a sliding window and Optimal Transport.
 
     Args:
-        sim_catalog: DataFrame of the long simulation.
-        historical_catalog: DataFrame of the target historical sequence.
-        shapefile_path: Path to the fault geometry shapefile.
+        hist_coords: (N, 2) array of (along-strike location, time) for historical events.
+        hist_masses: (N,) array of masses (e.g., rupture lengths) for historical events.
+        sim_coords: (M, 2) array of (along-strike location, time) for simulation events.
+        sim_masses: (M,) array of masses for simulation events.
         config: Dictionary with OT parameters (`scale_x`, `scale_t`, `scale_mass`, `reg`, `reg_m`, `step_years`).
+        window_edg: Padding around the historical duration in the simulation window.
 
     Returns:
         A pandas DataFrame with columns ['time', 'score'] detailing the OT
         distance at each window position.
     """
-    # 1. Prepare Historical Data
-    hist_coords, hist_masses = prepare_event_data(historical_catalog, shapefile_path)
     if hist_coords.size == 0:
-        raise ValueError("Historical catalog is empty or could not be processed.")
+        raise ValueError("Historical coordinates are empty.")
+    
+    if sim_coords.size == 0:
+        print("Warning: Simulation coordinates are empty.")
+        return pd.DataFrame(columns=['time', 'score'])
+
+    # 1. Prepare Historical Data
     hist_duration = hist_coords[:, 1].max() - hist_coords[:, 1].min()
     
-    hist_masses /= hist_masses / config['scale_mass']
-    
-    # 2. Prepare Simulation Data
-    sim_coords, sim_masses = prepare_event_data(sim_catalog, shapefile_path)
-    if sim_coords.size == 0:
-        print("Warning: Simulation catalog is empty.")
-        return pd.DataFrame(columns=['time', 'score'])
-    
-    sim_masses /= config['scale_mass']
+    # Normalize masses for stability
+    hist_masses_norm = hist_masses / config['scale_mass']
+    sim_masses_norm = sim_masses / config['scale_mass']
 
-    # 3. Initialize Sliding Window
+    # 2. Initialize Sliding Window
     sim_start_time = sim_coords[:, 1].min()
     sim_end_time = sim_coords[:, 1].max()
     step_years = config.get('step_years', 1.0)
@@ -135,7 +195,7 @@ def find_best_sequence(
     window_starts = np.arange(sim_start_time, sim_end_time - hist_duration, step_years)
     results = []
 
-    # 4. Loop Through Windows
+    # 3. Loop Through Windows
     print(f"Scanning {len(window_starts)} windows...")
     for t_start in window_starts:
         t_end = t_start + hist_duration
@@ -144,9 +204,8 @@ def find_best_sequence(
         window_mask = (sim_coords[:, 1] >= t_start - window_edg) & (sim_coords[:, 1] < t_end + window_edg)
         
         window_coords = sim_coords[window_mask]
-        window_masses = sim_masses[window_mask]
+        window_masses_subset = sim_masses_norm[window_mask]
         
-
         if window_coords.shape[0] == 0:
             results.append((t_start, np.inf))
             continue
@@ -164,12 +223,12 @@ def find_best_sequence(
 
         # Calculate score
         score = calculate_ot_score(
-            norm_hist_coords, hist_masses,
-            norm_window_coords, window_masses,
+            norm_hist_coords, hist_masses_norm,
+            norm_window_coords, window_masses_subset,
             config
         )
         results.append((t_start, score))
     
-    # 5. Finalize and Return
+    # 4. Finalize and Return
     results_df = pd.DataFrame(results, columns=['time', 'score'])
     return results_df
