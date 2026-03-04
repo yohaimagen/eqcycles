@@ -146,6 +146,20 @@ def calculate_ot_score(
     """
     Calculates the Unbalanced Optimal Transport distance between two point clouds
     with a weak penalty for topological sequence inversions.
+
+    Args:
+        coords1: (N, 2) array of normalized space-time coordinates for dataset 1.
+        masses1: (N,) array of masses for dataset 1.
+        coords2: (M, 2) array of normalized space-time coordinates for dataset 2.
+        masses2: (M,) array of masses for dataset 2.
+        config: Dictionary containing:
+            - 'reg': Entropic regularization parameter for Sinkhorn.
+            - 'reg_m': Marginal relaxation parameter for Unbalanced OT.
+            - 'seq_weight': (Optional) Weight for the topological sequence penalty.
+                A value > 0 penalizes backward temporal jumps in the matching.
+
+    Returns:
+        The OT distance (float).
     """
     if len(masses1) == 0 or len(masses2) == 0:
         return np.inf
@@ -186,6 +200,7 @@ def calculate_ot_score(
         
         # Calculate expected simulation index for each historical event
         row_sums = P.sum(axis=1)
+        
         # Safeguard against division by zero
         safe_row_sums = np.where(row_sums > 1e-12, row_sums, 1.0)
         expected_sim_indices = np.dot(P, sim_indices) / safe_row_sums
@@ -206,6 +221,16 @@ def get_transport_plan(
     """
     Exposes the coupling matrix P (transport plan) for visualization.
     Matches the logic in calculate_ot_score exactly.
+
+    Args:
+        coords1: (N, 2) array of normalized space-time coordinates for dataset 1.
+        masses1: (N,) array of masses for dataset 1.
+        coords2: (M, 2) array of normalized space-time coordinates for dataset 2.
+        masses2: (M,) array of masses for dataset 2.
+        config: Dictionary containing 'reg' and 'reg_m' parameters.
+
+    Returns:
+        The (N, M) coupling matrix P.
     """
     if len(masses1) == 0 or len(masses2) == 0:
         return np.zeros((len(masses1), len(masses2)))
@@ -292,8 +317,13 @@ def find_best_sequence(
         hist_masses: (N,) array of masses (e.g., rupture lengths) for historical events.
         sim_coords: (M, 2) array of (along-strike location, time) for simulation events.
         sim_masses: (M,) array of masses for simulation events.
-        config: Dictionary with OT parameters (`scale_x`, `scale_t`, `scale_mass`, `reg`, `reg_m`, `step_years`).
+        config: Dictionary with OT parameters:
+            - 'scale_x', 'scale_t', 'scale_mass': Normalization factors.
+            - 'reg', 'reg_m': Sinkhorn parameters.
+            - 'step_years': Sliding window step size.
+            - 'seq_weight': (Optional) Weight for the topological sequence penalty.
         window_edg: Padding around the historical duration in the simulation window.
+        parallel_jobs: Number of parallel jobs for window processing.
 
     Returns:
         A pandas DataFrame with columns ['time', 'score'] detailing the OT
