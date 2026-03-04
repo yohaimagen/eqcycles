@@ -55,7 +55,11 @@ def prepare_event_data(
     # Mass is the rupture length
     mass_m = np.abs(dist_end - dist_start)
 
-    time = catalog_df['time'].values
+    # Filter out events with negligible mass to prevent numerical instability in OT
+    valid_mask = mass_m > 1e-3
+    location_m = location_m[valid_mask]
+    mass_m = mass_m[valid_mask]
+    time = catalog_df['time'].values[valid_mask]
     
     # Combine into the final (N, 2) coordinate matrix for OT
     coords = np.column_stack((location_m, time))
@@ -108,11 +112,14 @@ def prepare_sim_event_data(
         rup_dists = centers[is_rup]
         min_dist = np.min(rup_dists)
         max_dist = np.max(rup_dists)
-        
-        # Location is the minimum distance along strike (easternmost point)
-        coords.append([min_dist, event.Time_year])
-        # Mass is the rupture length
-        masses.append(max_dist - min_dist)
+        rup_len = max_dist - min_dist
+
+        # Only include events with non-negligible rupture length
+        if rup_len > 1e-3:
+            # Location is the minimum distance along strike (easternmost point)
+            coords.append([min_dist, event.Time_year])
+            # Mass is the rupture length
+            masses.append(rup_len)
         
     if not coords:
         return np.array([]).reshape(0, 2), np.array([])
@@ -137,16 +144,96 @@ def calculate_ot_score(
     config: Dict[str, Any]
 ) -> float:
     """
-    Calculates the Unbalanced Optimal Transport distance between two point clouds.
+    Calculates the Unbalanced Optimal Transport distance between two point clouds
+    with a weak penalty for topological sequence inversions.
     """
+    if len(masses1) == 0 or len(masses2) == 0:
+        return np.inf
+
+    # Normalize masses to sum to 1.0 for numerical stability
+    m1_sum = np.sum(masses1)
+    m2_sum = np.sum(masses2)
+    avg_total_mass = (m1_sum + m2_sum) / 2.0
+    
+    masses1_norm = masses1 / m1_sum
+    masses2_norm = masses2 / m2_sum
+
     # Cost matrix: Euclidean distance in the normalized space-time plane
     cost_matrix = ot.dist(coords1, coords2, metric='euclidean')
+    # Normalize cost matrix by its mean to keep 'reg' parameters stable
+    mean_cost = np.mean(cost_matrix)
+    if mean_cost > 1e-12:
+        normalized_cost_matrix = cost_matrix / mean_cost
+    else:
+        normalized_cost_matrix = cost_matrix
 
-    score = ot.unbalanced.sinkhorn_unbalanced2(
-        masses1, masses2, cost_matrix, 
+    # Get transport plan P (coupling matrix)
+    P = ot.unbalanced.sinkhorn_unbalanced(
+        masses1_norm, masses2_norm, normalized_cost_matrix, 
         reg=config['reg'], reg_m=config['reg_m']
     )
-    return float(score)
+    
+    # Base OT score
+    base_score = np.sum(P * normalized_cost_matrix)
+
+    # Topological Sequence Penalty
+    seq_weight = config.get('seq_weight', 0.0)
+    sequence_penalty = 0.0
+    
+    if seq_weight > 0 and len(coords1) > 1 and len(coords2) > 1:
+        # Array of simulation indices
+        sim_indices = np.arange(len(coords2))
+        
+        # Calculate expected simulation index for each historical event
+        row_sums = P.sum(axis=1)
+        # Safeguard against division by zero
+        safe_row_sums = np.where(row_sums > 1e-12, row_sums, 1.0)
+        expected_sim_indices = np.dot(P, sim_indices) / safe_row_sums
+        
+        # Backward jumps in the timeline (topological inversions)
+        index_steps = np.diff(expected_sim_indices)
+        inversions = np.maximum(0, -index_steps)
+        sequence_penalty = seq_weight * np.sum(inversions)
+
+    # Rescale the final score back to physical units (average mass units)
+    return float((base_score + sequence_penalty) * avg_total_mass)
+
+def get_transport_plan(
+    coords1: np.ndarray, masses1: np.ndarray, 
+    coords2: np.ndarray, masses2: np.ndarray, 
+    config: Dict[str, Any]
+) -> np.ndarray:
+    """
+    Exposes the coupling matrix P (transport plan) for visualization.
+    Matches the logic in calculate_ot_score exactly.
+    """
+    if len(masses1) == 0 or len(masses2) == 0:
+        return np.zeros((len(masses1), len(masses2)))
+
+    # Normalize masses to sum to 1.0
+    m1_sum = np.sum(masses1)
+    m2_sum = np.sum(masses2)
+    avg_total_mass = (m1_sum + m2_sum) / 2.0
+    
+    masses1_norm = masses1 / m1_sum
+    masses2_norm = masses2 / m2_sum
+
+    # Cost matrix calculation
+    cost_matrix = ot.dist(coords1, coords2, metric='euclidean')
+    mean_cost = np.mean(cost_matrix)
+    if mean_cost > 1e-12:
+        normalized_cost_matrix = cost_matrix / mean_cost
+    else:
+        normalized_cost_matrix = cost_matrix
+
+    # Compute transport plan P
+    P = ot.unbalanced.sinkhorn_unbalanced(
+        masses1_norm, masses2_norm, normalized_cost_matrix, 
+        reg=config['reg'], reg_m=config['reg_m']
+    )
+    
+    # Rescale P by the physical units
+    return P * avg_total_mass
 
 def _process_single_window(
     t_start: float,
