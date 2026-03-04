@@ -131,17 +131,6 @@ def normalize_coords(
     normalized[:, 1] /= scale_t
     return normalized
 
-def create_structure_matrix(coords: np.ndarray) -> np.ndarray:
-    """
-    Computes the intra-domain temporal relationships.
-    """
-    if coords.size == 0:
-        return np.array([[]])
-    
-    times = coords[:, 1]
-    # Calculate symmetric absolute difference matrix: |t_i - t_j|
-    return np.abs(times[:, None] - times[None, :])
-
 def calculate_ot_score(
     coords1: np.ndarray, masses1: np.ndarray, 
     coords2: np.ndarray, masses2: np.ndarray, 
@@ -149,52 +138,15 @@ def calculate_ot_score(
 ) -> float:
     """
     Calculates the Unbalanced Optimal Transport distance between two point clouds.
-    Supports sequence-aware scoring via UFGW if 'alpha' > 0.
     """
-    alpha = config.get('alpha', 0.0)
-    
     # Cost matrix: Euclidean distance in the normalized space-time plane
     cost_matrix = ot.dist(coords1, coords2, metric='euclidean')
 
-    if alpha == 0:
-        score = ot.unbalanced.sinkhorn_unbalanced2(
-            masses1, masses2, cost_matrix, 
-            reg=config['reg'], reg_m=config['reg_m']
-        )
-    else:
-        C1 = create_structure_matrix(coords1)
-        C2 = create_structure_matrix(coords2)
-        score = ot.gromov.fused_unbalanced_gromov_wasserstein2(
-            cost_matrix, C1, C2, masses1, masses2,
-            loss_fun='square_loss', alpha=alpha, reg_m=config['reg_m']
-        )
-        
-    # Bound return value to 0.0
-    return max(0.0, float(score))
-
-def get_transport_plan(
-    coords1: np.ndarray, masses1: np.ndarray, 
-    coords2: np.ndarray, masses2: np.ndarray, 
-    config: Dict[str, Any]
-) -> np.ndarray:
-    """
-    Retrieves the actual coupling matrix (P) for downstream visualization and mass tracking.
-    """
-    alpha = config.get('alpha', 0.0)
-    cost_matrix = ot.dist(coords1, coords2, metric='euclidean')
-
-    if alpha == 0:
-        return ot.unbalanced.sinkhorn_unbalanced(
-            masses1, masses2, cost_matrix, 
-            reg=config['reg'], reg_m=config['reg_m']
-        )
-    else:
-        C1 = create_structure_matrix(coords1)
-        C2 = create_structure_matrix(coords2)
-        return ot.gromov.fused_unbalanced_gromov_wasserstein(
-            cost_matrix, C1, C2, masses1, masses2,
-            loss_fun='square_loss', alpha=alpha, reg_m=config['reg_m']
-        )
+    score = ot.unbalanced.sinkhorn_unbalanced2(
+        masses1, masses2, cost_matrix, 
+        reg=config['reg'], reg_m=config['reg_m']
+    )
+    return float(score)
 
 def _process_single_window(
     t_start: float,
@@ -208,7 +160,7 @@ def _process_single_window(
     config: Dict[str, Any]
 ) -> Tuple[float, float]:
     """Helper for parallel window processing."""
-    # Fast slicing with searchsorted
+    # Step 3: Fast slicing with searchsorted
     idx_start = np.searchsorted(sim_times, t_start - window_edg, side='left')
     idx_end = np.searchsorted(sim_times, t_end + window_edg, side='right')
     
@@ -253,13 +205,8 @@ def find_best_sequence(
         hist_masses: (N,) array of masses (e.g., rupture lengths) for historical events.
         sim_coords: (M, 2) array of (along-strike location, time) for simulation events.
         sim_masses: (M,) array of masses for simulation events.
-        config: Dictionary with OT parameters:
-            - scale_x, scale_t, scale_mass
-            - reg, reg_m
-            - step_years
-            - alpha (optional): weight for structural sequence [0, 1]. Default 0.
+        config: Dictionary with OT parameters (`scale_x`, `scale_t`, `scale_mass`, `reg`, `reg_m`, `step_years`).
         window_edg: Padding around the historical duration in the simulation window.
-        parallel_jobs: Number of processes to use.
 
     Returns:
         A pandas DataFrame with columns ['time', 'score'] detailing the OT
