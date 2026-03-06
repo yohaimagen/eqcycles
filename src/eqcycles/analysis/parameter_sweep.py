@@ -353,7 +353,11 @@ def run_ensemble_parameter_sweep(
     return pd.concat(all_sweep_dfs, ignore_index=True)
 
 
-def aggregate_ensemble_metrics(ensemble_df: pd.DataFrame) -> pd.DataFrame:
+def aggregate_ensemble_metrics(
+    ensemble_df: pd.DataFrame, 
+    mass_recovery_threshold: float = 90.0,
+    inversion_magnitude_threshold: float = 1.0
+    ) -> pd.DataFrame:
     """
     Aggregates metrics from an ensemble of simulations.
 
@@ -366,8 +370,8 @@ def aggregate_ensemble_metrics(ensemble_df: pd.DataFrame) -> pd.DataFrame:
     # 1. Calculate success flag for each row
     ensemble_df = ensemble_df.copy()
     ensemble_df['success'] = (
-        (ensemble_df['mass_recovery_pct'] > 80.0) & 
-        (ensemble_df['inversion_magnitude'] < 1.0)
+        (ensemble_df['mass_recovery_pct'] > mass_recovery_threshold) & 
+        (ensemble_df['inversion_magnitude'] < inversion_magnitude_threshold)
     ).astype(float)
 
     # 2. Group by hyperparameters

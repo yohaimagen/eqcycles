@@ -185,32 +185,79 @@ def plot_ensemble_pareto_front(aggregated_df: pd.DataFrame):
     return plt.gca()
 
 
-def plot_ensemble_robustness_heatmap(aggregated_df: pd.DataFrame):
+def plot_ensemble_robustness_heatmap(
+    aggregated_df: pd.DataFrame,
+    mass_recovery_threshold: float = 90.0,
+    inversion_magnitude_threshold: float = 1.0
+):
     """
-    Plots a heatmap of success_rate across the reg_m and seq_weight space.
+    Plots a 4-panel heatmap showing ensemble metrics and stability across 
+    the reg_m and seq_weight space.
+    
+    Metrics: success_rate, best_score, mass_recovery_pct, inversion_magnitude.
+    Annotations include mean ± std for physical metrics to show robustness.
     
     Args:
         aggregated_df: Aggregated DataFrame from aggregate_ensemble_metrics.
+        mass_recovery_threshold: Threshold for mass recovery used in success_rate.
+        inversion_magnitude_threshold: Threshold for inversion magnitude used in success_rate.
     """
     if aggregated_df.empty:
         print("Warning: Aggregated DataFrame is empty.")
         return None
         
-    plt.figure(figsize=(10, 8))
+    metrics = [
+        ('success_rate', None),
+        ('best_score', 'best_score_std'),
+        ('mass_recovery_pct', 'mass_recovery_pct_std'),
+        ('inversion_magnitude', 'inversion_magnitude_std')
+    ]
     
-    # Pivot the data
-    pivot_table = aggregated_df.pivot(index='reg_m', columns='seq_weight', values='success_rate')
+    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
+    axes = axes.flatten()
     
-    sns.heatmap(
-        pivot_table, 
-        annot=True, 
-        fmt=".2f", 
-        cmap='RdYlGn', 
-        cbar_kws={'label': 'Success Rate (Mass > 80%, Inversion < 1.0)'}
-    )
+    for ax, (metric_base, std_col) in zip(axes, metrics):
+        mean_col = f"{metric_base}_mean" if metric_base != 'success_rate' else 'success_rate'
+        
+        # Pivot data for heatmap
+        pivot_mean = aggregated_df.pivot(index='reg_m', columns='seq_weight', values=mean_col)
+        
+        # Prepare custom annotations: "mean \n ±std"
+        if std_col:
+            pivot_std = aggregated_df.pivot(index='reg_m', columns='seq_weight', values=std_col)
+            annot_data = np.array([
+                [f"{m:.2f}\n±{s:.2f}" for m, s in zip(row_m, row_s)]
+                for row_m, row_s in zip(pivot_mean.values, pivot_std.values)
+            ])
+            label = metric_base
+        else:
+            # success_rate doesn't have a calculated std in the aggregation step
+            annot_data = pivot_mean.round(2).astype(str).values
+            label = f"Success Rate (Mass > {mass_recovery_threshold}%, Inv < {inversion_magnitude_threshold})"
+
+        # Select colormap based on metric type
+        if metric_base == 'success_rate':
+            cmap = 'RdYlGn'
+        elif 'inversion' in metric_base or 'score' in metric_base:
+            # Lower is better for these
+            cmap = 'YlOrRd'
+        else:
+            # Higher is better
+            cmap = 'YlGnBu'
+               
+        sns.heatmap(
+            pivot_mean, 
+            annot=annot_data, 
+            fmt="", 
+            cmap=cmap, 
+            cbar_kws={'label': label},
+            ax=ax,
+            annot_kws={"size": 9}
+        )
+        
+        ax.set_title(f'Ensemble: {metric_base}')
+        ax.set_xlabel('Sequence Weight (seq_weight)')
+        ax.set_ylabel('Marginal Relaxation (reg_m)')
     
-    plt.title('Ensemble Robustness Heatmap')
-    plt.xlabel('Sequence Weight (seq_weight)')
-    plt.ylabel('Marginal Relaxation (reg_m)')
-    
-    return plt.gca()
+    plt.tight_layout()
+    return axes

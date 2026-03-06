@@ -70,8 +70,8 @@ def test_run_2d_parameter_sweep_basic():
 def test_aggregate_ensemble_metrics():
     # Mock ensemble results
     mock_ensemble_df = pd.DataFrame([
-        {'reg_m': 10.0, 'seq_weight': 0.0, 'mass_recovery_pct': 90.0, 'inversion_magnitude': 0.5, 'best_time': 100.0, 'best_score': 0.1, 'sim_index': 0},
-        {'reg_m': 10.0, 'seq_weight': 0.0, 'mass_recovery_pct': 85.0, 'inversion_magnitude': 0.6, 'best_time': 105.0, 'best_score': 0.15, 'sim_index': 1},
+        {'reg_m': 10.0, 'seq_weight': 0.0, 'mass_recovery_pct': 95.0, 'inversion_magnitude': 0.5, 'best_time': 100.0, 'best_score': 0.1, 'sim_index': 0},
+        {'reg_m': 10.0, 'seq_weight': 0.0, 'mass_recovery_pct': 91.0, 'inversion_magnitude': 0.6, 'best_time': 105.0, 'best_score': 0.15, 'sim_index': 1},
         {'reg_m': 100.0, 'seq_weight': 10.0, 'mass_recovery_pct': 70.0, 'inversion_magnitude': 2.0, 'best_time': 110.0, 'best_score': 0.5, 'sim_index': 0},
         {'reg_m': 100.0, 'seq_weight': 10.0, 'mass_recovery_pct': 75.0, 'inversion_magnitude': 1.5, 'best_time': 115.0, 'best_score': 0.4, 'sim_index': 1},
     ])
