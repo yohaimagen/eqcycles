@@ -164,31 +164,17 @@ def calculate_ot_score(
     if len(masses1) == 0 or len(masses2) == 0:
         return np.inf
 
-    # Normalize masses to sum to 1.0 for numerical stability
-    m1_sum = np.sum(masses1)
-    m2_sum = np.sum(masses2)
-    avg_total_mass = (m1_sum + m2_sum) / 2.0
-    
-    masses1_norm = masses1 / m1_sum
-    masses2_norm = masses2 / m2_sum
-
     # Cost matrix: Euclidean distance in the normalized space-time plane
     cost_matrix = ot.dist(coords1, coords2, metric='euclidean')
-    # Normalize cost matrix by its mean to keep 'reg' parameters stable
-    mean_cost = np.mean(cost_matrix)
-    if mean_cost > 1e-12:
-        normalized_cost_matrix = cost_matrix / mean_cost
-    else:
-        normalized_cost_matrix = cost_matrix
 
     # Get transport plan P (coupling matrix)
     P = ot.unbalanced.sinkhorn_unbalanced(
-        masses1_norm, masses2_norm, normalized_cost_matrix, 
+        masses1, masses2, cost_matrix, 
         reg=config['reg'], reg_m=config['reg_m']
     )
     
     # Base OT score
-    base_score = np.sum(P * normalized_cost_matrix)
+    base_score = np.sum(P * cost_matrix)
 
     # Topological Sequence Penalty
     seq_weight = config.get('seq_weight', 0.0)
@@ -210,8 +196,7 @@ def calculate_ot_score(
         inversions = np.maximum(0, -index_steps)
         sequence_penalty = seq_weight * np.sum(inversions)
 
-    # Rescale the final score back to physical units (average mass units)
-    return float((base_score + sequence_penalty) * avg_total_mass)
+    return float(base_score + sequence_penalty)
 
 def get_transport_plan(
     coords1: np.ndarray, masses1: np.ndarray, 
@@ -235,30 +220,59 @@ def get_transport_plan(
     if len(masses1) == 0 or len(masses2) == 0:
         return np.zeros((len(masses1), len(masses2)))
 
-    # Normalize masses to sum to 1.0
-    m1_sum = np.sum(masses1)
-    m2_sum = np.sum(masses2)
-    avg_total_mass = (m1_sum + m2_sum) / 2.0
-    
-    masses1_norm = masses1 / m1_sum
-    masses2_norm = masses2 / m2_sum
-
     # Cost matrix calculation
     cost_matrix = ot.dist(coords1, coords2, metric='euclidean')
-    mean_cost = np.mean(cost_matrix)
-    if mean_cost > 1e-12:
-        normalized_cost_matrix = cost_matrix / mean_cost
-    else:
-        normalized_cost_matrix = cost_matrix
 
     # Compute transport plan P
     P = ot.unbalanced.sinkhorn_unbalanced(
-        masses1_norm, masses2_norm, normalized_cost_matrix, 
+        masses1, masses2, cost_matrix, 
         reg=config['reg'], reg_m=config['reg_m']
     )
     
-    # Rescale P by the physical units
-    return P * avg_total_mass
+    return P
+
+def evaluate_window_metrics(
+    hist_coords: np.ndarray, 
+    hist_masses: np.ndarray, 
+    sim_window_coords: np.ndarray, 
+    sim_window_masses: np.ndarray, 
+    config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Extracts physical metrics from a specific matching window.
+
+    Args:
+        hist_coords: (N, 2) array of normalized historical coordinates.
+        hist_masses: (N,) array of normalized historical masses.
+        sim_window_coords: (M, 2) array of normalized simulation window coordinates.
+        sim_window_masses: (M,) array of normalized simulation window masses.
+        config: Dictionary with OT parameters.
+
+    Returns:
+        Dictionary with 'mass_recovery_pct' and 'inversion_magnitude'.
+    """
+    P = get_transport_plan(hist_coords, hist_masses, sim_window_coords, sim_window_masses, config)
+    
+    # 1. Mass Recovery: Total mass in P relative to total historical mass
+    hist_mass_sum = np.sum(hist_masses)
+    mass_recovery = np.sum(P) / hist_mass_sum if hist_mass_sum > 0 else 0.0
+    
+    # 2. Inversion Magnitude: Sum of backward jumps in the matching
+    inversion_magnitude = 0.0
+    if len(hist_coords) > 1 and len(sim_window_coords) > 1:
+        sim_indices = np.arange(len(sim_window_coords))
+        row_sums = P.sum(axis=1)
+        safe_row_sums = np.where(row_sums > 1e-12, row_sums, 1.0)
+        expected_sim_indices = np.dot(P, sim_indices) / safe_row_sums
+        
+        index_steps = np.diff(expected_sim_indices)
+        inversions = np.maximum(0, -index_steps)
+        inversion_magnitude = np.sum(inversions)
+        
+    return {
+        'mass_recovery_pct': float(mass_recovery * 100),
+        'inversion_magnitude': float(inversion_magnitude)
+    }
 
 def _process_single_window(
     t_start: float,
@@ -306,7 +320,7 @@ def find_best_sequence(
     sim_masses: np.ndarray,
     config: Dict[str, Any],
     window_edg: float = 50.0,
-    parallel_jobs: int = 10
+    parallel_jobs: int = 1
 ) -> pd.DataFrame:
     """
     Finds the best match for a historical sequence in a simulation catalog
@@ -345,13 +359,17 @@ def find_best_sequence(
     # 2. Prepare Historical Data (Pre-calculate shared values)
     hist_duration = hist_coords[:, 1].max() - hist_coords[:, 1].min()
     
-    relative_hist_coords = hist_coords.copy()
-    relative_hist_coords[:, 1] -= hist_coords[:, 1].min()
-    norm_hist_coords = normalize_coords(
-        relative_hist_coords, config['scale_x'], config['scale_t']
-    )
+    if config.get('is_hist_normalized', False):
+        norm_hist_coords = hist_coords
+        hist_masses_norm = hist_masses
+    else:
+        relative_hist_coords = hist_coords.copy()
+        relative_hist_coords[:, 1] -= hist_coords[:, 1].min()
+        norm_hist_coords = normalize_coords(
+            relative_hist_coords, config['scale_x'], config['scale_t']
+        )
+        hist_masses_norm = hist_masses / config['scale_mass']
     
-    hist_masses_norm = hist_masses / config['scale_mass']
     sim_masses_norm = sim_masses / config['scale_mass']
 
     # 3. Initialize Sliding Window
@@ -359,19 +377,33 @@ def find_best_sequence(
     sim_end_time = sim_times.max()
     step_years = config.get('step_years', 1.0)
     
-    window_starts = np.arange(sim_start_time, sim_end_time - hist_duration, step_years)
+    window_starts = np.arange(sim_start_time, sim_end_time - hist_duration + step_years/2, step_years)
+    if len(window_starts) == 0:
+        window_starts = np.array([sim_start_time])
 
-    # 4. Joblib's Parallel Execution
-    print(f"Scanning {len(window_starts)} windows with Joblib parallelization...")
-    results = Parallel(n_jobs=parallel_jobs)(
-        delayed(_process_single_window)(
-            t_start, t_start + hist_duration, window_edg,
-            sim_times, sim_coords, sim_masses_norm,
-            norm_hist_coords, hist_masses_norm,
-            config
-        ) for t_start in window_starts
-    )
+    # 4. Execution (Parallel or Sequential)
+    if parallel_jobs > 1:
+        print(f"Scanning {len(window_starts)} windows with Joblib parallelization (n_jobs={parallel_jobs})...")
+        results = Parallel(n_jobs=parallel_jobs)(
+            delayed(_process_single_window)(
+                t_start, t_start + hist_duration, window_edg,
+                sim_times, sim_coords, sim_masses_norm,
+                norm_hist_coords, hist_masses_norm,
+                config
+            ) for t_start in window_starts
+        )
+    else:
+        # Pure sequential execution to avoid Joblib overhead/nesting issues
+        results = [
+            _process_single_window(
+                t_start, t_start + hist_duration, window_edg,
+                sim_times, sim_coords, sim_masses_norm,
+                norm_hist_coords, hist_masses_norm,
+                config
+            ) for t_start in window_starts
+        ]
     
     # 5. Reassemble and Return
     results_df = pd.DataFrame(results, columns=['time', 'score'])
     return results_df
+
