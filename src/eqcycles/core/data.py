@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 import numpy as np
 import pandas as pd
 import meshio # Assuming meshio objects will be stored directly
@@ -15,7 +15,7 @@ class SimulationData:
 
     # Mesh information
     mesh: meshio.Mesh        # The full meshio Mesh object
-    mesh_verts: np.ndarray   # Vertices from mesh.cells_dict["triangle"] for plotting
+    mesh_verts: Union[np.ndarray, list]  # Vertices for plotting (array for uniform, list for mixed)
     mesh_limits: list        # [xmin, xmax, ymin, ymax, zmin, zmax] of mesh points
 
     # Earthquake related data

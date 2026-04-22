@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import meshio
 from eqcycles.core.data import SimulationData
-from eqcycles.analysis.downsampling import downsample_simulation, calculate_triangle_areas, get_triangle_centroids
+from eqcycles.analysis.downsampling import downsample_simulation, calculate_cell_areas, get_cell_centroids
 import pandas as pd
 
 def create_simple_mesh(nx, ny, x_len=10.0, y_len=10.0):
@@ -31,7 +31,7 @@ def synthetic_data():
     # High-res mesh: 11x11 points -> 10x10 quads -> 200 triangles
     mesh_high = create_simple_mesh(11, 11)
     ncell = len(mesh_high.cells_dict["triangle"])
-    coords = get_triangle_centroids(mesh_high)
+    coords = get_cell_centroids(mesh_high)
     
     # Simple time dependent data
     ntime = 5
@@ -70,7 +70,7 @@ def synthetic_data():
 def test_area_calculation():
     # 1x1 quad -> 2 triangles. Total area should be 1.0.
     mesh = create_simple_mesh(2, 2, x_len=1.0, y_len=1.0)
-    areas = calculate_triangle_areas(mesh)
+    areas = calculate_cell_areas(mesh)
     assert len(areas) == 2
     assert np.allclose(np.sum(areas), 1.0)
 
@@ -91,8 +91,8 @@ def test_downsampling_conservation(synthetic_data):
     assert np.allclose(downsampled.eq_slip, 1.0)
     
     # 3. Area conservation check
-    source_areas = calculate_triangle_areas(synthetic_data.mesh)
-    target_areas = calculate_triangle_areas(mesh_low)
+    source_areas = calculate_cell_areas(synthetic_data.mesh)
+    target_areas = calculate_cell_areas(mesh_low)
     assert np.allclose(np.sum(source_areas), np.sum(target_areas))
 
 def test_catalog_mapping(synthetic_data):
@@ -113,7 +113,7 @@ def test_z_filtering():
     cells = [("triangle", np.array([[0, 1, 2], [3, 4, 5]]))]
     mesh_high = meshio.Mesh(points, cells)
     
-    coords = get_triangle_centroids(mesh_high)
+    coords = get_cell_centroids(mesh_high)
     ncell = 2
     data = SimulationData(
         time=np.array([0]),

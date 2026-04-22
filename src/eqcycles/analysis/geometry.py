@@ -66,6 +66,73 @@ def project_to_fault_trace(sim_coords: np.ndarray, shapefile_path: str) -> np.nd
     
     return node_along_strike
 
+def compute_along_strike_profile(
+    mesh_along_strike: np.ndarray,
+    values: np.ndarray,
+    coords: np.ndarray,
+    num_bins: int = 200,
+    max_depth_km: float = 14.0,
+) -> tuple:
+    """
+    Aggregates node-level values into along-strike bins with a depth filter.
+
+    Nodes deeper than ``max_depth_km`` are excluded.  Within each bin the
+    remaining shallow-node values are averaged across depth.  Works for both
+    scalar fields ``(n_nodes,)`` and multi-column fields ``(n_nodes, N)``.
+
+    Args:
+        mesh_along_strike: Along-strike distance (metres) for each mesh node,
+            as returned by ``project_to_fault_trace``.
+        values: Per-node scalar ``(n_nodes,)`` or multi-column array
+            ``(n_nodes, N)`` to aggregate.
+        coords: Mesh node coordinates ``(n_nodes, 3)``.  The absolute value of
+            ``coords[:, 2]`` is used as depth in km.
+        num_bins: Number of along-strike bins.
+        max_depth_km: Only nodes with ``|coords[:, 2]| <= max_depth_km`` are
+            included in the aggregation.
+
+    Returns:
+        bin_centers_km : ``(num_bins,)`` — bin centre positions; negative values
+            follow the west-is-negative convention used in other plots.
+        profile        : ``(num_bins,)`` or ``(num_bins, N)`` — depth-averaged,
+            bin-averaged values.  Bins with no nodes are left as zero.
+        valid          : ``(num_bins,)`` bool — True where at least one node
+            contributed to the bin.
+    """
+    shallow_mask = np.abs(coords[:, 2]) <= max_depth_km
+    if not np.any(shallow_mask):
+        raise ValueError(
+            f"No nodes found shallower than {max_depth_km} km. "
+            "Check the depth convention in coords[:, 2]."
+        )
+
+    along_strike_shallow = mesh_along_strike[shallow_mask]
+    values_shallow = values[shallow_mask]
+
+    max_dist = float(mesh_along_strike.max())
+    bin_edges = np.linspace(0, max_dist, num_bins + 1)
+    bin_centers_km = -(bin_edges[:-1] + bin_edges[1:]) / 2 * 1e-3
+
+    bin_idx = np.clip(np.digitize(along_strike_shallow, bin_edges) - 1, 0, num_bins - 1)
+
+    count_per_bin = np.zeros(num_bins, dtype=int)
+    np.add.at(count_per_bin, bin_idx, 1)
+    valid = count_per_bin > 0
+
+    if values_shallow.ndim == 1:
+        profile = np.zeros(num_bins)
+        np.add.at(profile, bin_idx, values_shallow)
+        profile[valid] /= count_per_bin[valid]
+    else:
+        n_cols = values_shallow.shape[1]
+        profile = np.zeros((num_bins, n_cols))
+        for col in range(n_cols):
+            np.add.at(profile[:, col], bin_idx, values_shallow[:, col])
+        profile[valid] /= count_per_bin[valid, np.newaxis]
+
+    return bin_centers_km, profile, valid
+
+
 def get_geometry_context(shapefile_path: str):
     """
     Helper to get the reference line geometry and CRS.

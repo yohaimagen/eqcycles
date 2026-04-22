@@ -7,23 +7,46 @@ import pandas as pd
 from eqcycles.core.data import SimulationData
 from numba import njit, prange
 
-def calculate_triangle_areas(mesh: meshio.Mesh) -> np.ndarray:
-    if "triangle" not in mesh.cells_dict:
-        raise ValueError("Mesh does not contain 'triangle' cells.")
-    triangles = mesh.cells_dict["triangle"]
+def calculate_cell_areas(mesh: meshio.Mesh) -> np.ndarray:
+    areas = []
     points = mesh.points
-    v0 = points[triangles[:, 0]]
-    v1 = points[triangles[:, 1]]
-    v2 = points[triangles[:, 2]]
-    cross_product = np.cross(v1 - v0, v2 - v0)
-    areas = 0.5 * np.linalg.norm(cross_product, axis=1)
-    return areas
+    for cell_block in mesh.cells:
+        if cell_block.type == "triangle":
+            triangles = cell_block.data
+            v0 = points[triangles[:, 0]]
+            v1 = points[triangles[:, 1]]
+            v2 = points[triangles[:, 2]]
+            cross_product = np.cross(v1 - v0, v2 - v0)
+            block_areas = 0.5 * np.linalg.norm(cross_product, axis=1)
+            areas.append(block_areas)
+        elif cell_block.type == "quad":
+            quads = cell_block.data
+            v0 = points[quads[:, 0]]
+            v1 = points[quads[:, 1]]
+            v2 = points[quads[:, 2]]
+            v3 = points[quads[:, 3]]
+            # Divide quad into two triangles (0-1-2 and 0-2-3)
+            area1 = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+            area2 = 0.5 * np.linalg.norm(np.cross(v2 - v0, v3 - v0), axis=1)
+            areas.append(area1 + area2)
+    
+    if not areas:
+        raise ValueError("Mesh does not contain 'triangle' or 'quad' cells.")
+    
+    return np.concatenate(areas)
 
-def get_triangle_centroids(mesh: meshio.Mesh) -> np.ndarray:
-    triangles = mesh.cells_dict["triangle"]
+def get_cell_centroids(mesh: meshio.Mesh) -> np.ndarray:
+    centroids = []
     points = mesh.points
-    centroids = points[triangles].mean(axis=1)
-    return centroids
+    for cell_block in mesh.cells:
+        if cell_block.type in ["triangle", "quad"]:
+            block_centroids = points[cell_block.data].mean(axis=1)
+            centroids.append(block_centroids)
+            
+    if not centroids:
+        raise ValueError("Mesh does not contain 'triangle' or 'quad' cells.")
+        
+    return np.vstack(centroids)
 
 @njit(parallel=True)
 def _aggregate_1d_numba(field, indices, offsets, weights, n_target):
@@ -79,10 +102,10 @@ def downsample_simulation(
     # 1. Geometry and Area Extraction
     if isinstance(target_mesh, (str, Path)):
         target_mesh = meshio.read(target_mesh)
-    source_areas = calculate_triangle_areas(high_res_data.mesh)
-    source_centroids = get_triangle_centroids(high_res_data.mesh)
-    target_areas = calculate_triangle_areas(target_mesh)
-    target_centroids = get_triangle_centroids(target_mesh)
+    source_areas = calculate_cell_areas(high_res_data.mesh)
+    source_centroids = get_cell_centroids(high_res_data.mesh)
+    target_areas = calculate_cell_areas(target_mesh)
+    target_centroids = get_cell_centroids(target_mesh)
     
     n_source = len(source_centroids)
     n_target = len(target_centroids)
@@ -150,8 +173,16 @@ def downsample_simulation(
         new_catalog['Hypo_Node'] = target_nodes
 
     # 6. Construct new SimulationData
-    triangles = target_mesh.cells_dict["triangle"]
-    mesh_verts = target_mesh.points[triangles]
+    # Collect all face vertices for target mesh plotting
+    mesh_verts = []
+    for cell_block in target_mesh.cells:
+        if cell_block.type in ["triangle", "quad"]:
+            for cell_indices in cell_block.data:
+                mesh_verts.append(target_mesh.points[cell_indices])
+    
+    if len(mesh_verts) > 0 and all(len(v) == len(mesh_verts[0]) for v in mesh_verts):
+        mesh_verts = np.array(mesh_verts)
+
     mesh_limits = [
         target_mesh.points[:,0].min(), target_mesh.points[:,0].max(),
         target_mesh.points[:,1].min(), target_mesh.points[:,1].max(),

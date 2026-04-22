@@ -4,6 +4,8 @@ import meshio
 from pathlib import Path
 from typing import Optional, List
 
+import warnings
+
 from eqcycles.core.data import SimulationData
 from eqcycles.io.base import BaseLoader
 
@@ -49,15 +51,21 @@ class HBILoader(BaseLoader):
             raise FileNotFoundError(f"Mesh file not found: {self.mesh_path}")
         mesh = meshio.read(self.mesh_path)
         
-        # For visualization, we often need triangles and their vertices
-        # Check if "triangle" cells exist, otherwise handle accordingly
-        if "triangle" in mesh.cells_dict:
-            triangles = mesh.cells_dict["triangle"]
-            mesh_verts = mesh.points[triangles]
-        else:
-            # Handle cases where there might not be triangle cells or choose a default
-            print("Warning: No 'triangle' cells found in mesh. Mesh vertices for plotting might be incomplete.")
-            mesh_verts = np.array([]) # Or handle differently based on expected mesh types
+        # For visualization, we often need triangles/quads and their vertices
+        # Collect all face vertices for plotting
+        mesh_verts = []
+        for cell_block in mesh.cells:
+            if cell_block.type in ["triangle", "quad"]:
+                for cell_indices in cell_block.data:
+                    mesh_verts.append(mesh.points[cell_indices])
+        
+        if len(mesh_verts) == 0:
+            print("Warning: No 'triangle' or 'quad' cells found in mesh. Mesh vertices for plotting might be incomplete.")
+            mesh_verts = np.array([])
+        elif all(len(v) == len(mesh_verts[0]) for v in mesh_verts):
+            # If all cells have the same number of vertices, convert to a single numpy array for performance
+            mesh_verts = np.array(mesh_verts)
+        # otherwise it remains a list of arrays, which Poly3DCollection handles
 
         mesh_limits = [
             mesh.points[:,0].min(), mesh.points[:,0].max(),
@@ -144,11 +152,23 @@ class HBILoader(BaseLoader):
         if not catalog_file.exists():
             raise FileNotFoundError(f"Event catalog file not found: {catalog_file}")
             
-        catalog = pd.read_csv(catalog_file, sep='\s+', header=None)
+        try:
+            catalog = pd.read_csv(catalog_file, sep=r'\s+', header=None)
+        except (pd.errors.EmptyDataError, pd.errors.ParserError, ValueError) as e:
+            warnings.warn(f"Catalog file {catalog_file} could not be parsed. Error: {e}")
+            catalog = pd.DataFrame()
         # Attempt to dynamically set columns based on expected number + any extra
         expected_cols = ['Event_ID', 'Step', 'Time_sec', 'Mw', 'Hypo_Node']
-        if catalog.shape[1] < len(expected_cols):
-             raise ValueError(f"Catalog file {catalog_file} has fewer columns than expected.")
+        
+        if not catalog.empty:
+            if catalog.shape[1] < len(expected_cols):
+                 raise ValueError(f"Catalog file {catalog_file} has fewer columns than expected. Found {catalog.shape[1]} cols.")
+            
+            catalog.columns = expected_cols + [f'Col_{i}' for i in range(len(expected_cols), catalog.shape[1])]
+            catalog['Time_year'] = catalog['Time_sec'] / (365*24*60*60)
+        else:
+            # If empty, initialize with the expected column names to prevent downstream crashes
+            catalog = pd.DataFrame(columns=expected_cols + ['Time_year'])
         
         catalog.columns = expected_cols + [f'Col_{i}' for i in range(len(expected_cols), catalog.shape[1])]
         catalog['Time_year'] = catalog['Time_sec'] / (365*24*60*60)

@@ -34,6 +34,7 @@ np.zeros(dummy_data_shape, dtype=np.float64).tofile(Path(dummy_output_dir) / "ve
 np.zeros(dummy_data_shape, dtype=np.float64).tofile(Path(dummy_output_dir) / "psi7.dat")
 np.zeros(dummy_data_shape, dtype=np.float64).tofile(Path(dummy_output_dir) / "tau7.dat")
 np.zeros(dummy_data_shape, dtype=np.float64).tofile(Path(dummy_output_dir) / "sigma7.dat")
+np.zeros(dummy_data_shape, dtype=np.float64).tofile(Path(dummy_output_dir) / "slip7.dat")
 
 # EQslip.dat: binary float64, num_events * ncell values
 dummy_num_events = 2
@@ -57,7 +58,7 @@ mesh.write(dummy_mesh_path)
 print("Attempting to load data using HBILoader...")
 try:
     loader = HBILoader(mesh_path=dummy_mesh_path)
-    sim_data = loader.load(path=dummy_output_dir, run_id='7')
+    sim_data = loader.load(path=dummy_output_dir, run_id='7', load_heavy_fields=True)
     print(f"Successfully loaded data.")
     print(f"sim_data.slip_rate.shape: {sim_data.slip_rate.shape}")
     print(f"sim_data.time.shape: {sim_data.time.shape}")
