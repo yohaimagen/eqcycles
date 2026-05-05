@@ -310,10 +310,17 @@ def stream_spatially_downsample(
         with open(out_path, 'wb') as f_out:
             for t in kept_steps:
                 row = np.array(src_mmap[t, :], dtype=np.float64)
+                # vel file stores raw velocity; HBILoader applies log10 in memory.
+                # Aggregate in log space to match downsample_simulation, then
+                # convert back to raw velocity for storage.
+                if field == 'slip_rate':
+                    row = np.log10(np.abs(row))
                 target_row = _aggregate_1d_numba(
                     row, mapping.indices_flat, mapping.offsets,
                     mapping.weights_flat, mapping.n_target,
                 )
+                if field == 'slip_rate':
+                    target_row = 10.0 ** target_row
                 target_row.astype(np.float64).tofile(f_out)
         del src_mmap
 
